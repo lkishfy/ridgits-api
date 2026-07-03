@@ -7,12 +7,18 @@ import {
   arraysOverlap,
   formatMatchForClient,
   isVisibleInCommunity,
+  readMatchOverallScore,
 } from '@/lib/matching/compatibility'
-import { normalizeQuizProgress } from '@/lib/matching/quiz-normalize'
+import { normalizeQuizProgress, syncQuizProgressForMatching } from '@/lib/matching/quiz-normalize'
 import { effectiveSubscriptionTier } from '@/lib/subscription-badge'
 
 export const NATIONWIDE_CACHE_TTL_MS = 24 * 60 * 60 * 1000
-export const NATIONWIDE_CACHE_VERSION = 9
+export const NATIONWIDE_CACHE_VERSION = 12
+
+function cachedMatchesNeedRecompute(matches: Record<string, unknown>[]): boolean {
+  if (matches.length === 0) return false
+  return matches.every((match) => readMatchOverallScore(match) === 0)
+}
 
 async function validateNationwideMatches(matches: Record<string, unknown>[]) {
   const db = getDb()
@@ -54,19 +60,21 @@ function demoAnswer(quiz: ReturnType<typeof normalizeQuizProgress>, key: string,
   return quiz.answers[key] ?? quiz.answers[String(fallbackIndex)]
 }
 
-export async function getTopNationwideMatches(uid: string, limit = 10) {
+export async function getTopNationwideMatches(uid: string, limit = 10, forceRefresh = false) {
   const db = getDb()
   const cacheRef = db.collection('topNationwideMatches').doc(uid)
   const cacheSnap = await cacheRef.get()
 
-  if (cacheSnap.exists) {
+  if (!forceRefresh && cacheSnap.exists) {
     const cache = cacheSnap.data() ?? {}
     const updatedAt = cache.updatedAt as Timestamp | undefined
     const age = updatedAt ? Date.now() - updatedAt.toMillis() : Infinity
     if (age < NATIONWIDE_CACHE_TTL_MS && cache.version === NATIONWIDE_CACHE_VERSION) {
       const cached = (cache.matches as Record<string, unknown>[]) ?? []
-      const validated = await validateNationwideMatches(cached)
-      return validated.slice(0, limit).map(formatMatchForClient)
+      if (!cachedMatchesNeedRecompute(cached)) {
+        const validated = await validateNationwideMatches(cached)
+        return validated.slice(0, limit).map(formatMatchForClient)
+      }
     }
   }
 
@@ -94,7 +102,7 @@ export async function computeTopNationwideMatchesInternal(uid: string) {
     return []
   }
 
-  const userQuiz = normalizeQuizProgress(userQuizSnap.data() ?? {})
+  const userQuiz = await syncQuizProgressForMatching(uid, userQuizSnap.data() ?? {})
   const userProfile = userProfileSnap.exists ? (userProfileSnap.data() ?? {}) : {}
 
   const myGender = demoAnswer(userQuiz, 'demo_000', 0)

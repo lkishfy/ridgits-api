@@ -10,7 +10,7 @@ export async function requireActiveSubscription(uid: string, email?: string | nu
   const access = await getNearbyAccess(uid, email)
   if (!access.hasNearbyAccess) {
     throw new ApiError(
-      'A Ridgits+ subscription is required to do this. Upgrade to start connecting.',
+      'A Ridgits subscription (Ridgits+, Premium, or Ultra) is required to do this. Upgrade to start connecting.',
       402,
       'SUBSCRIPTION_REQUIRED',
     )

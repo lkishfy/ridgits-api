@@ -1,8 +1,29 @@
 import type { NormalizedQuizProgress } from '@/lib/matching/quiz-normalize'
 
+function normalizeCompareValue(value: unknown): unknown {
+  if (typeof value === 'string') {
+    const parsed = parseInt(value, 10)
+    if (!Number.isNaN(parsed)) return parsed
+  }
+  return value
+}
+
+function valuesEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  return normalizeCompareValue(a) === normalizeCompareValue(b)
+}
+
 function matchesPreference(answer: unknown, preference: unknown): boolean {
-  if (Array.isArray(preference)) return preference.includes(answer)
-  return answer === preference
+  if (Array.isArray(preference)) {
+    if (Array.isArray(answer)) {
+      return answer.some((item) => preference.some((pref) => valuesEqual(item, pref)))
+    }
+    return preference.some((pref) => valuesEqual(answer, pref))
+  }
+  if (Array.isArray(answer)) {
+    return answer.some((item) => valuesEqual(item, preference))
+  }
+  return valuesEqual(answer, preference)
 }
 
 function isDemographicQuestionKey(key: string): boolean {
@@ -14,20 +35,43 @@ function isDemographicQuestionKey(key: string): boolean {
 function getQuestionCategory(questionId: string): string | null {
   const id = questionId.replace(/^ll_/, '')
   if (id.startsWith('comm_') || id.startsWith('spicy_comm_')) return 'communication'
-  if (id.startsWith('intm_') || id.startsWith('msg_') || id.startsWith('bnd_')) return 'intimacy'
+  if (id.startsWith('intim_') || id.startsWith('intm_') || id.startsWith('msg_') || id.startsWith('bnd_')) {
+    return 'intimacy'
+  }
   if (id.startsWith('vals_') || id.startsWith('spicy_vals_')) return 'values'
-  if (id.startsWith('socl_')) return 'social'
+  if (id.startsWith('socl_') || id.startsWith('social_')) return 'social'
   if (id.startsWith('comt_')) return 'commitment'
   return null
 }
 
-function readScore(value: unknown): number | undefined {
+function effectivePreference(
+  preferred: unknown,
+  fallback: unknown,
+): unknown {
+  if (preferred === undefined || preferred === null) return fallback
+  if (Array.isArray(preferred) && preferred.length === 0) return fallback
+  return preferred
+}
+
+export function readScore(value: unknown): number | undefined {
   if (typeof value === 'number' && !Number.isNaN(value)) return Math.round(value)
   if (typeof value === 'string') {
     const parsed = parseInt(value, 10)
     if (!Number.isNaN(parsed)) return parsed
   }
   return undefined
+}
+
+export function readMatchOverallScore(match: Record<string, unknown>): number {
+  const rawCompat = match.compatibility
+  if (typeof rawCompat === 'number' || typeof rawCompat === 'string') {
+    return readScore(rawCompat) ?? 0
+  }
+  if (rawCompat && typeof rawCompat === 'object') {
+    const nested = readScore((rawCompat as Record<string, unknown>).overall)
+    if (nested !== undefined) return nested
+  }
+  return readScore(match.overall) ?? readScore(match.compatibilityScore) ?? 0
 }
 
 export interface CompatibilityResult {
@@ -67,8 +111,8 @@ export function calculateCompatibility(
 
     const ans1 = answers1[q]
     const ans2 = answers2[q]
-    const pref1 = preferred1[q] !== undefined ? preferred1[q] : ans1
-    const pref2 = preferred2[q] !== undefined ? preferred2[q] : ans2
+    const pref1 = effectivePreference(preferred1[q], ans1)
+    const pref2 = effectivePreference(preferred2[q], ans2)
     const imp1 = typeof importance1[q] === 'number' ? importance1[q] : 50
     const imp2 = typeof importance2[q] === 'number' ? importance2[q] : 50
     const isDealbreaker1 = dealbreakers1[q] === true
@@ -171,46 +215,61 @@ export function isVisibleInCommunity(profile: Record<string, unknown> | null | u
   return profile?.visibleInCommunity !== false
 }
 
-export function formatMatchForClient(match: Record<string, unknown>) {
-  const rawCompat = match.compatibility as Record<string, unknown> | undefined
-  const nestedOverall = readScore(rawCompat?.overall)
-  const nestedCommunication = readScore(rawCompat?.communication)
-  const hasNestedCompat =
-    nestedOverall !== undefined ||
-    nestedCommunication !== undefined ||
-    readScore(rawCompat?.intimacy) !== undefined
+function deriveOverallFromDimensions(compatibility: {
+  overall: number
+  communication: number
+  intimacy: number
+  values: number
+  social: number
+  commitment: number
+}) {
+  if (compatibility.overall > 0) return compatibility.overall
+  const topLevelSum =
+    compatibility.communication +
+    compatibility.intimacy +
+    compatibility.values +
+    compatibility.social +
+    compatibility.commitment
+  if (topLevelSum > 0) return Math.round(topLevelSum / 5)
+  return 0
+}
 
-  const overall =
-    nestedOverall ??
-    readScore(match.overall) ??
-    readScore(match.compatibilityScore) ??
-    0
+export function formatMatchForClient(match: Record<string, unknown>) {
+  const rawCompat = match.compatibility
+  const compatObject =
+    rawCompat && typeof rawCompat === 'object' && !Array.isArray(rawCompat)
+      ? (rawCompat as Record<string, unknown>)
+      : undefined
+  const legacyOverall =
+    typeof rawCompat === 'number' || typeof rawCompat === 'string' ? readScore(rawCompat) : undefined
+  const nestedOverall = readScore(compatObject?.overall)
+  const nestedCommunication = readScore(compatObject?.communication)
+  const topOverall = readScore(match.overall) ?? readScore(match.compatibilityScore)
 
   const compatibility = {
-    overall,
+    overall: 0,
     communication:
-      nestedCommunication ?? readScore(match.communication) ?? readScore(rawCompat?.communication) ?? 0,
-    intimacy: readScore(rawCompat?.intimacy) ?? readScore(match.intimacy) ?? 0,
-    values: readScore(rawCompat?.values) ?? readScore(match.values) ?? 0,
-    social: readScore(rawCompat?.social) ?? readScore(match.social) ?? 0,
-    commitment: readScore(rawCompat?.commitment) ?? readScore(match.commitment) ?? 0,
+      nestedCommunication ?? readScore(match.communication) ?? readScore(compatObject?.communication) ?? 0,
+    intimacy: readScore(compatObject?.intimacy) ?? readScore(match.intimacy) ?? 0,
+    values: readScore(compatObject?.values) ?? readScore(match.values) ?? 0,
+    social: readScore(compatObject?.social) ?? readScore(match.social) ?? 0,
+    commitment: readScore(compatObject?.commitment) ?? readScore(match.commitment) ?? 0,
   }
 
-  if (!hasNestedCompat && overall === 0) {
-    const topLevelSum =
-      compatibility.communication +
-      compatibility.intimacy +
-      compatibility.values +
-      compatibility.social +
-      compatibility.commitment
-    if (topLevelSum > 0 && compatibility.overall === 0) {
-      compatibility.overall = Math.round(topLevelSum / 5)
-    }
+  if (legacyOverall !== undefined && legacyOverall > 0) {
+    compatibility.overall = legacyOverall
+  } else if (nestedOverall !== undefined && nestedOverall > 0) {
+    compatibility.overall = nestedOverall
+  } else if (topOverall !== undefined && topOverall > 0) {
+    compatibility.overall = topOverall
+  } else {
+    compatibility.overall = deriveOverallFromDimensions(compatibility)
   }
 
   return {
     ...match,
     compatibility,
-    compatibilityScore: overall > 0 ? overall : compatibility.overall,
+    compatibilityScore: compatibility.overall,
+    overall: compatibility.overall,
   }
 }

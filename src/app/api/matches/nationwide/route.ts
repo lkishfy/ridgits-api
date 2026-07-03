@@ -9,7 +9,7 @@ export async function POST(request: NextRequest) {
   const auth = await requireRidgitsAuth(request)
   if (isNextResponse(auth)) return auth
 
-  let body: { limit?: number } = {}
+  let body: { limit?: number; forceRefresh?: boolean } = {}
   try {
     body = await request.json()
   } catch {
@@ -20,6 +20,7 @@ export async function POST(request: NextRequest) {
     const matches = await getTopNationwideMatches(
       auth.uid,
       typeof body.limit === 'number' ? body.limit : 10,
+      body.forceRefresh === true,
     )
     return NextResponse.json({ matches })
   } catch (error) {
