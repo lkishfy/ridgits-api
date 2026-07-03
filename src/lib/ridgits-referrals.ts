@@ -3,7 +3,6 @@ import { FieldValue, Timestamp, type DocumentData } from 'firebase-admin/firesto
 import { getDb } from '@/lib/firebase-admin'
 import { ApiError } from '@/lib/api-errors'
 import { isDisposableEmail } from '@/lib/trust-safety/disposable-email'
-import { ARCHETYPE_PACK_IDS } from '@/lib/ridgits-products'
 
 export const RIDGITS_REFERRAL_CODE_PREFIX = 'RIDGITS-'
 const REFERRAL_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
@@ -15,15 +14,14 @@ export const RIDGITS_REFERRAL_REDEMPTION_WINDOW_HOURS = 24
 export const RIDGITS_REFERRAL_MAX_REDEMPTIONS_PER_WINDOW = 3
 export const RIDGITS_REFERRAL_BONUS_GRANT_COOLDOWN_HOURS = 24
 
-/** Paid non-ultra packs eligible for referral unlocks, in grant order. */
-export const RIDGITS_REFERRAL_ELIGIBLE_PACK_IDS = [
-  'situationship',
-  'self-sabotage',
-  'social-battery',
-  'messaging',
-  'boundaries',
-  'attraction',
+/** Referral-exclusive quizzes granted in order — not sold via IAP. */
+export const RIDGITS_REFERRAL_PACK_IDS = [
+  'referral-first-spark',
+  'referral-slow-burn',
+  'referral-trust-line',
 ] as const
+
+export const RIDGITS_REFERRAL_PACK_ID_SET = new Set<string>(RIDGITS_REFERRAL_PACK_IDS)
 
 const REDEMPTION_WINDOW_MS = RIDGITS_REFERRAL_REDEMPTION_WINDOW_HOURS * 60 * 60 * 1000
 const BONUS_GRANT_COOLDOWN_MS = RIDGITS_REFERRAL_BONUS_GRANT_COOLDOWN_HOURS * 60 * 60 * 1000
@@ -231,6 +229,10 @@ function userHasPackAccess(
   packId: string,
 ): boolean {
   if (!userData) return false
+  if (RIDGITS_REFERRAL_PACK_ID_SET.has(packId)) {
+    const unlocked = Array.isArray(userData.unlockedPacks) ? userData.unlockedPacks : []
+    return unlocked.includes(packId)
+  }
   const tier = String(userData.subscriptionTier ?? 'free')
   if (tier === 'premium' || tier === 'ultra') return true
   const unlocked = Array.isArray(userData.unlockedPacks) ? userData.unlockedPacks : []
@@ -239,8 +241,7 @@ function userHasPackAccess(
 }
 
 function pickReferralBonusPack(userData: DocumentData | undefined): string | null {
-  for (const packId of RIDGITS_REFERRAL_ELIGIBLE_PACK_IDS) {
-    if (!ARCHETYPE_PACK_IDS.has(packId)) continue
+  for (const packId of RIDGITS_REFERRAL_PACK_IDS) {
     if (!userHasPackAccess(userData, packId)) return packId
   }
   return null
