@@ -199,8 +199,37 @@ export async function applyAppStoreNotification(input: {
   const isNearbyProduct = NEARBY_PRODUCT_IDS.has(productId)
   const membership = SUBSCRIPTION_PRODUCT_IDS[productId]
 
-  const activeTypes = new Set(['SUBSCRIBED', 'DID_RENEW', 'OFFER_REDEEMED', 'DID_CHANGE_RENEWAL_STATUS'])
+  const activeTypes = new Set(['SUBSCRIBED', 'DID_RENEW', 'OFFER_REDEEMED'])
   const inactiveTypes = new Set(['EXPIRED', 'GRACE_PERIOD_EXPIRED', 'REFUND', 'REVOKE'])
+
+  if (notificationType === 'DID_CHANGE_RENEWAL_STATUS' && (isNearbyProduct || membership)) {
+    if (subtype === 'AUTO_RENEW_DISABLED') {
+      await userRef.set(
+        {
+          isSubscribed: false,
+          subscriptionStatus: 'canceled',
+          subscriptionExpiresAt: expiresIso ?? FieldValue.delete(),
+          subscriptionExpiration: expiresIso ?? FieldValue.delete(),
+          subscriptionCurrentPeriodEnd: expiresIso ?? FieldValue.delete(),
+          lastValidatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      )
+    } else if (subtype === 'AUTO_RENEW_ENABLED') {
+      await userRef.set(
+        {
+          isSubscribed: true,
+          subscriptionStatus: 'active',
+          subscriptionExpiresAt: expiresIso,
+          subscriptionExpiration: expiresIso,
+          subscriptionCurrentPeriodEnd: expiresIso,
+          lastValidatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      )
+    }
+    return
+  }
 
   if (activeTypes.has(notificationType) && isNearbyProduct) {
     await userRef.set(

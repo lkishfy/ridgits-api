@@ -30,33 +30,25 @@ function isBypassEmail(email?: string | null): boolean {
   return list.includes(email.toLowerCase())
 }
 
-/** Mirrors Ridgits Cloud Functions `hasActiveSubscriptionAccess`. */
+/** Active paid access — canceled subscriptions lose access immediately. */
 export function hasActiveSubscriptionAccess(
   userData: Record<string, unknown> | undefined,
 ): boolean {
   if (!userData) return false
 
-  if (
+  if (userData.subscriptionStatus === 'canceled') {
+    return false
+  }
+
+  if (userData.isSubscribed === false) {
+    return false
+  }
+
+  return (
     userData.isSubscribed === true ||
     userData.subscriptionStatus === 'active' ||
     userData.subscriptionStatus === 'trialing'
-  ) {
-    return true
-  }
-
-  if (userData.subscriptionStatus === 'canceled') {
-    const periodEnd =
-      parseExpiration(userData.subscriptionCurrentPeriodEnd) ??
-      parseExpiration(userData.subscriptionEndDate) ??
-      parseExpiration(userData.subscriptionExpiresAt) ??
-      parseExpiration(userData.subscriptionExpiration)
-
-    if (periodEnd && periodEnd.getTime() > Date.now()) {
-      return true
-    }
-  }
-
-  return false
+  )
 }
 
 export async function getNearbyAccess(
