@@ -9,6 +9,7 @@ import {
   isVisibleInCommunity,
 } from '@/lib/matching/compatibility'
 import { normalizeQuizProgress } from '@/lib/matching/quiz-normalize'
+import { effectiveSubscriptionTier } from '@/lib/subscription-badge'
 
 export const NATIONWIDE_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 export const NATIONWIDE_CACHE_VERSION = 9
@@ -174,7 +175,7 @@ export async function computeTopNationwideMatchesInternal(uid: string) {
       compatibility: candidate.compat,
       archetype: candidate.archetype ?? null,
       subscriptionStatus: p.subscriptionStatus ?? otherUserProfile.subscriptionStatus ?? null,
-      subscriptionTier: p.subscriptionTier ?? otherUserProfile.subscriptionTier ?? 'free',
+      subscriptionTier: effectiveSubscriptionTier({ ...otherUserProfile, ...p }),
     })
   }
 

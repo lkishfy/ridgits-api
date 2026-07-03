@@ -17,6 +17,7 @@ import {
   SUPPORTED_IAP_PRODUCT_IDS,
   TIER_RANK,
 } from '@/lib/ridgits-products'
+import { revokeSubscriptionBadge } from '@/lib/subscription-badge'
 
 export interface LinkPurchaseInput {
   uid: string
@@ -215,6 +216,12 @@ export async function applyAppStoreNotification(input: {
         },
         { merge: true },
       )
+      await revokeSubscriptionBadge({
+        uid: userRef.id,
+        reason: 'app_store_auto_renew_disabled',
+        source: 'app_store',
+        metadata: { notificationType, subtype, productId },
+      })
     } else if (subtype === 'AUTO_RENEW_ENABLED') {
       await userRef.set(
         {
@@ -275,8 +282,15 @@ export async function applyAppStoreNotification(input: {
         subscriptionExpiresAt: expiresIso ?? FieldValue.delete(),
         subscriptionExpiration: expiresIso ?? FieldValue.delete(),
         subscriptionCurrentPeriodEnd: expiresIso ?? FieldValue.delete(),
+        lastValidatedAt: FieldValue.serverTimestamp(),
       },
       { merge: true },
     )
+    await revokeSubscriptionBadge({
+      uid: userRef.id,
+      reason: 'app_store_subscription_inactive',
+      source: 'app_store',
+      metadata: { notificationType, subtype, productId },
+    })
   }
 }

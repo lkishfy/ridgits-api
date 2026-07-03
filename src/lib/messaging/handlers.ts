@@ -1,5 +1,6 @@
 import { FieldValue, Timestamp } from 'firebase-admin/firestore'
 import { ApiError } from '@/lib/api-errors'
+import { effectiveSubscriptionTier } from '@/lib/subscription-badge'
 import { sendEngagementPush } from '@/lib/push-notifications'
 import { getDb } from '@/lib/firebase-admin'
 import {
@@ -188,11 +189,7 @@ function buildParticipantsMetadata(
   senderPublic?: Record<string, unknown>,
   recipientPublic?: Record<string, unknown>,
 ) {
-  const tier = (data: Record<string, unknown>) => {
-    let t = String(data.subscriptionTier ?? 'free')
-    if (t === 'free' && (data.isSubscribed === true || data.subscriptionStatus === 'active')) t = 'plus'
-    return t
-  }
+  const tier = (data: Record<string, unknown>) => effectiveSubscriptionTier(data)
 
   return {
     [senderId]: {

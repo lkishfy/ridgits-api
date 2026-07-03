@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
 import { getNearbyAccess } from '@/lib/ridgits-subscription'
+import { revokeSubscriptionBadgeIfInactive } from '@/lib/subscription-badge'
 
 export async function GET(request: NextRequest) {
   const auth = await requireRidgitsAuth(request)
   if (isNextResponse(auth)) return auth
 
+  await revokeSubscriptionBadgeIfInactive(auth.uid)
   const access = await getNearbyAccess(auth.uid, auth.email)
 
   return NextResponse.json({

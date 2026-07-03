@@ -1,5 +1,6 @@
 import { getDb } from '@/lib/firebase-admin'
 import { Timestamp } from 'firebase-admin/firestore'
+import { effectiveSubscriptionTier } from '@/lib/subscription-badge'
 
 function parseExpiration(value: unknown): Date | null {
   if (!value) return null
@@ -80,7 +81,8 @@ export async function getNearbyAccess(
   }
 
   const data = snap.data() ?? {}
-  const tier = String(data.subscriptionTier ?? '').trim() || null
+  const active = hasActiveSubscriptionAccess(data)
+  const tier = active ? effectiveSubscriptionTier(data) : 'free'
   const sourceRaw = String(data.subscriptionSource ?? '').trim()
   const subscriptionSource: 'stripe' | 'app_store' | null =
     sourceRaw === 'app_store'
@@ -95,15 +97,13 @@ export async function getNearbyAccess(
     parseExpiration(data.subscriptionCurrentPeriodEnd) ??
     parseExpiration(data.subscriptionEndDate)
 
-  const active = hasActiveSubscriptionAccess(data)
-
   // LinkedIn-style: any active Ridgits subscription (web Stripe or App Store) unlocks nearby.
   if (!active) {
     return {
       hasNearbyAccess: false,
       subscriptionExpiresAt: expiration?.toISOString() ?? null,
       subscriptionSource,
-      subscriptionTier: tier,
+      subscriptionTier: 'free',
     }
   }
 
@@ -112,7 +112,7 @@ export async function getNearbyAccess(
       hasNearbyAccess: false,
       subscriptionExpiresAt: expiration.toISOString(),
       subscriptionSource,
-      subscriptionTier: tier,
+      subscriptionTier: 'free',
     }
   }
 
