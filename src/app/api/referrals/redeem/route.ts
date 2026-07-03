@@ -7,7 +7,7 @@ export async function POST(request: NextRequest) {
   const auth = await requireRidgitsAuth(request)
   if (isNextResponse(auth)) return auth
 
-  let body: { referralCode?: string } = {}
+  let body: { referralCode?: string; source?: string } = {}
   try {
     body = await request.json()
   } catch {
@@ -24,6 +24,7 @@ export async function POST(request: NextRequest) {
       referredUid: auth.uid,
       referredEmail: auth.email,
       referralCode,
+      source: body.source?.trim() || undefined,
     })
     return NextResponse.json(result)
   } catch (error) {

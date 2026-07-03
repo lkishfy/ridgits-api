@@ -372,6 +372,7 @@ export async function redeemRidgitsReferralCode(input: {
   referredUid: string
   referredEmail?: string | null
   referralCode: string
+  source?: string
 }): Promise<{
   redeemed: boolean
   alreadyRedeemed: boolean
@@ -456,6 +457,7 @@ export async function redeemRidgitsReferralCode(input: {
       referredUid: input.referredUid,
       referredEmail,
       referralCode: normalizedCode,
+      redeemSource: input.source ?? null,
       status: 'pending',
       grantedAt: null,
       grantedPackId: null,
@@ -468,6 +470,7 @@ export async function redeemRidgitsReferralCode(input: {
       referredUid: input.referredUid,
       referredEmail,
       referralCode: normalizedCode,
+      redeemSource: input.source ?? null,
       status: 'pending',
       bonusGranted: 0,
       createdAt: FieldValue.serverTimestamp(),
@@ -475,7 +478,11 @@ export async function redeemRidgitsReferralCode(input: {
   }
 
   await db.collection('users').doc(input.referredUid).set(
-    { referredByUid: referrerUid, redeemedReferralCode: normalizedCode },
+    {
+      referredByUid: referrerUid,
+      redeemedReferralCode: normalizedCode,
+      referralRedeemSource: input.source ?? null,
+    },
     { merge: true },
   )
 
