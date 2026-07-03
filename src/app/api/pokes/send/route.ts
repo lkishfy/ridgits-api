@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { apiErrorResponse } from '@/lib/api-errors'
 import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
 import { sendPoke } from '@/lib/pokes/handlers'
+import { enforceRateLimit, getClientIp } from '@/lib/trust-safety/rate-limit'
 
 export async function POST(request: NextRequest) {
   const auth = await requireRidgitsAuth(request)
@@ -19,11 +20,31 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const result = await sendPoke(auth.uid, body.toUserId.trim())
+    await enforceRateLimit({
+      bucket: 'pokes-send-uid',
+      identifier: auth.uid,
+      limit: 60,
+      windowSeconds: 60 * 60,
+      message: 'You are sending pokes too quickly. Please try again later.',
+    })
+    await enforceRateLimit({
+      bucket: 'pokes-send-ip',
+      identifier: getClientIp(request),
+      limit: 120,
+      windowSeconds: 60 * 60,
+    })
+
+    const result = await sendPoke(auth.uid, body.toUserId.trim(), {
+      emailVerified: auth.emailVerified,
+      email: auth.email,
+    })
     return NextResponse.json(result)
   } catch (error) {
-    const { message, status } = apiErrorResponse(error)
+    const { message, status, code, retryAfterSeconds } = apiErrorResponse(error)
     console.error('[pokes/send]', auth.uid, message)
-    return NextResponse.json({ error: message }, { status })
+    return NextResponse.json(
+      { error: message, code },
+      { status, headers: retryAfterSeconds ? { 'Retry-After': String(retryAfterSeconds) } : undefined },
+    )
   }
 }

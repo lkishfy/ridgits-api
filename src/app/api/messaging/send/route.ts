@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { apiErrorResponse } from '@/lib/api-errors'
 import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
 import { sendMessage } from '@/lib/messaging/handlers'
+import { enforceRateLimit, getClientIp } from '@/lib/trust-safety/rate-limit'
 
 export async function POST(request: NextRequest) {
   const auth = await requireRidgitsAuth(request)
@@ -19,11 +20,31 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const result = await sendMessage(auth.uid, body.conversationId.trim(), body.message ?? '')
+    await enforceRateLimit({
+      bucket: 'messaging-send-uid',
+      identifier: auth.uid,
+      limit: 120,
+      windowSeconds: 60 * 60,
+      message: 'You are sending messages too quickly. Please slow down.',
+    })
+    await enforceRateLimit({
+      bucket: 'messaging-send-ip',
+      identifier: getClientIp(request),
+      limit: 240,
+      windowSeconds: 60 * 60,
+    })
+
+    const result = await sendMessage(auth.uid, body.conversationId.trim(), body.message ?? '', {
+      emailVerified: auth.emailVerified,
+      email: auth.email,
+    })
     return NextResponse.json(result)
   } catch (error) {
-    const { message, status } = apiErrorResponse(error)
+    const { message, status, code, retryAfterSeconds } = apiErrorResponse(error)
     console.error('[messaging/send]', auth.uid, message)
-    return NextResponse.json({ error: message }, { status })
+    return NextResponse.json(
+      { error: message, code },
+      { status, headers: retryAfterSeconds ? { 'Retry-After': String(retryAfterSeconds) } : undefined },
+    )
   }
 }

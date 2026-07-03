@@ -19,11 +19,17 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const result = await approveConversation(auth.uid, body.conversationId.trim())
+    const result = await approveConversation(auth.uid, body.conversationId.trim(), {
+      emailVerified: auth.emailVerified,
+      email: auth.email,
+    })
     return NextResponse.json(result)
   } catch (error) {
-    const { message, status } = apiErrorResponse(error)
+    const { message, status, code, retryAfterSeconds } = apiErrorResponse(error)
     console.error('[messaging/approve]', auth.uid, message)
-    return NextResponse.json({ error: message }, { status })
+    return NextResponse.json(
+      { error: message, code },
+      { status, headers: retryAfterSeconds ? { 'Retry-After': String(retryAfterSeconds) } : undefined },
+    )
   }
 }

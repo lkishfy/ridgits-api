@@ -9,6 +9,7 @@ Firebase **Auth + Firestore** stay on project `ridgits-24f2d`.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/health` | Health check |
+| POST | `/api/auth/validate-signup` | Pre-signup check: disposable email + 18+ birth year (unauthenticated, IP rate-limited) |
 | GET | `/api/account/access` | Nearby subscription access |
 | POST | `/api/iap/link-purchase` | Link App Store purchase |
 | POST | `/api/webhooks/app-store` | App Store Server Notifications v2 |
@@ -51,3 +52,10 @@ npm run dev
 ## iOS integration
 
 `RidgitsAPIClient` handles all HTTP backend calls. Firestore realtime listeners remain on the Firebase SDK for conversations/messages.
+
+## Trust & safety
+
+See [`TRUST_SAFETY.md`](./TRUST_SAFETY.md) for disposable-email blocking, email-verification
+gating, phone/VOIP verification prep, birth-year 18+ enforcement, signup rate limiting
+(+ recommended Vercel Firewall rules), the 24h new-account cooldown, profile-photo
+validation, and the paid-subscription requirement for pokes/messaging.

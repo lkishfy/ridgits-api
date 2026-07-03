@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { apiErrorResponse } from '@/lib/api-errors'
 import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
 import { registerDeviceToken, unregisterDeviceToken } from '@/lib/push-notifications'
+import { enforceRateLimit, getClientIp } from '@/lib/trust-safety/rate-limit'
+import { recordDeviceFingerprint } from '@/lib/trust-safety/phone-safety'
 
 export async function POST(request: NextRequest) {
   const auth = await requireRidgitsAuth(request)
@@ -25,19 +27,35 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    await enforceRateLimit({
+      bucket: 'register-device-ip',
+      identifier: getClientIp(request),
+      limit: 30,
+      windowSeconds: 60 * 60,
+    })
+
+    const deviceId = body.deviceId.trim()
     const result = await registerDeviceToken({
       uid: auth.uid,
-      deviceId: body.deviceId.trim(),
+      deviceId,
       fcmToken: body.fcmToken.trim(),
       platform: body.platform ?? 'ios',
       appVersion: body.appVersion,
       deviceModel: body.deviceModel,
     })
+
+    // Device-fingerprint reuse across many accounts is a strong fake-account signal —
+    // reuses the deviceId iOS already sends here (no new client work required).
+    await recordDeviceFingerprint(auth.uid, deviceId)
+
     return NextResponse.json(result)
   } catch (error) {
-    const { message, status } = apiErrorResponse(error)
+    const { message, status, code, retryAfterSeconds } = apiErrorResponse(error)
     console.error('[notifications/register-device]', auth.uid, message)
-    return NextResponse.json({ error: message }, { status })
+    return NextResponse.json(
+      { error: message, code },
+      { status, headers: retryAfterSeconds ? { 'Retry-After': String(retryAfterSeconds) } : undefined },
+    )
   }
 }
 

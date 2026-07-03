@@ -4,6 +4,12 @@ import { verifyIdToken } from '@/lib/firebase-admin'
 export interface RidgitsAuthContext {
   uid: string
   email: string | null
+  /**
+   * From the verified Firebase ID token's `email_verified` claim — authoritative because
+   * the token is Admin-SDK-verified server-side, not a client-supplied Firestore field.
+   * OAuth providers (Google/Apple) set this to true automatically.
+   */
+  emailVerified: boolean
 }
 
 export async function requireRidgitsAuth(
@@ -24,6 +30,7 @@ export async function requireRidgitsAuth(
     return {
       uid: decoded.uid,
       email: typeof decoded.email === 'string' ? decoded.email : null,
+      emailVerified: decoded.email_verified === true,
     }
   } catch {
     return NextResponse.json({ error: 'Invalid token' }, { status: 401 })

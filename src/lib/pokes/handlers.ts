@@ -3,6 +3,9 @@ import { ApiError } from '@/lib/api-errors'
 import { sendEngagementPush } from '@/lib/push-notifications'
 import { getDb } from '@/lib/firebase-admin'
 import { isVisibleInCommunity } from '@/lib/matching/compatibility'
+import { requireAccountCooldownElapsed } from '@/lib/trust-safety/account-age'
+import { requireActiveSubscription } from '@/lib/trust-safety/subscription-gate'
+import { validateProfilePhotoUrl } from '@/lib/trust-safety/profile-photo'
 
 async function getDisplayName(uid: string): Promise<string> {
   const snap = await getDb().collection('publicProfiles').doc(uid).get()
@@ -20,8 +23,20 @@ async function ensureNoMutualBlocks(senderId: string, recipientId: string) {
   if (recipientBlockedSnap.exists) throw new ApiError('This user is not accepting pokes from you.', 403)
 }
 
-export async function sendPoke(senderId: string, toUserId: string) {
+export async function sendPoke(
+  senderId: string,
+  toUserId: string,
+  actor: { emailVerified: boolean; email?: string | null },
+) {
   if (senderId === toUserId) throw new ApiError('You cannot poke yourself.', 400)
+
+  if (!actor.emailVerified) {
+    throw new ApiError(
+      'Please verify your email address before sending pokes. Check your inbox for the verification link, or resend it from Settings.',
+      403,
+      'EMAIL_NOT_VERIFIED',
+    )
+  }
 
   const db = getDb()
   const [senderSnap, recipientSnap, senderPublicSnap, recipientPublicSnap] = await Promise.all([
@@ -38,6 +53,16 @@ export async function sendPoke(senderId: string, toUserId: string) {
   if (!isVisibleInCommunity(recipientSnap.data()) || !isVisibleInCommunity(recipientPublicSnap.data())) {
     throw new ApiError('This user is not visible in the community.', 403)
   }
+
+  const photoCheck = await validateProfilePhotoUrl(
+    String(senderPublicSnap.data()?.image ?? senderSnap.data()?.image ?? ''),
+  )
+  if (!photoCheck.ok) {
+    throw new ApiError(photoCheck.reason ?? 'A valid profile photo is required to send pokes.', 412, 'INVALID_PROFILE_PHOTO')
+  }
+
+  await requireActiveSubscription(senderId, actor.email)
+  requireAccountCooldownElapsed(senderSnap.data())
 
   await ensureNoMutualBlocks(senderId, toUserId)
 

@@ -9,6 +9,9 @@ import {
   conversationIdForUsers,
 } from '@/lib/messaging/profanity'
 import { isVisibleInCommunity } from '@/lib/matching/compatibility'
+import { requireAccountCooldownElapsed } from '@/lib/trust-safety/account-age'
+import { requireActiveSubscription } from '@/lib/trust-safety/subscription-gate'
+import { validateProfilePhotoUrl } from '@/lib/trust-safety/profile-photo'
 
 export const MAX_MESSAGE_LENGTH = 2000
 export const DEFAULT_MAX_MESSAGES = 16
@@ -38,7 +41,20 @@ async function ensureUserExists(uid: string) {
   return snap.exists ? snap : null
 }
 
-async function ensureMessagingAllowed(uid: string) {
+interface MessagingActor {
+  emailVerified: boolean
+  email?: string | null
+}
+
+async function ensureMessagingAllowed(uid: string, actor: MessagingActor) {
+  if (!actor.emailVerified) {
+    throw new ApiError(
+      'Please verify your email address before messaging. Check your inbox for the verification link, or resend it from Settings.',
+      403,
+      'EMAIL_NOT_VERIFIED',
+    )
+  }
+
   const userSnap = await ensureUserExists(uid)
   if (!userSnap) throw new ApiError('You must complete your profile before messaging.', 412, 'USER_NOT_FOUND')
 
@@ -71,6 +87,13 @@ async function ensureMessagingAllowed(uid: string) {
       412,
     )
   }
+
+  const photoCheck = await validateProfilePhotoUrl(image)
+  if (!photoCheck.ok) {
+    throw new ApiError(photoCheck.reason ?? 'A valid profile photo is required to message.', 412, 'INVALID_PROFILE_PHOTO')
+  }
+
+  await requireActiveSubscription(uid, actor.email)
 
   const data = userSnap.data() ?? {}
   if (data.messagingSuspended) {
@@ -193,7 +216,7 @@ function buildParticipantsMetadata(
   }
 }
 
-export async function startConversation(senderId: string, toUserId: string, message: string) {
+export async function startConversation(senderId: string, toUserId: string, message: string, actor: MessagingActor) {
   if (toUserId === senderId) throw new ApiError('You cannot message yourself.', 400)
 
   const normalizedMessage = normalizeMessage(message)
@@ -210,7 +233,8 @@ export async function startConversation(senderId: string, toUserId: string, mess
     throw new ApiError('Messaging has been disabled for your account due to a policy violation.', 412)
   }
 
-  const { data: senderData } = await ensureMessagingAllowed(senderId)
+  const { data: senderData } = await ensureMessagingAllowed(senderId, actor)
+  requireAccountCooldownElapsed(senderData)
   const recipientSnap = await ensureUserExists(toUserId)
   if (!recipientSnap) throw new ApiError('Recipient not found.', 404)
   const recipientData = recipientSnap.data() ?? {}
@@ -309,8 +333,8 @@ export async function startConversation(senderId: string, toUserId: string, mess
   return { conversationId }
 }
 
-export async function approveConversation(userId: string, conversationId: string) {
-  await ensureMessagingAllowed(userId)
+export async function approveConversation(userId: string, conversationId: string, actor: MessagingActor) {
+  await ensureMessagingAllowed(userId, actor)
   const db = getDb()
   const conversationRef = db.collection('conversations').doc(conversationId)
 
@@ -381,7 +405,7 @@ export async function approveConversation(userId: string, conversationId: string
   return { conversationId, status: 'active' }
 }
 
-export async function sendMessage(senderId: string, conversationId: string, message: string) {
+export async function sendMessage(senderId: string, conversationId: string, message: string, actor: MessagingActor) {
   const normalizedMessage = normalizeMessage(message)
   if (!normalizedMessage) throw new ApiError('Message cannot be empty.', 400)
   if (normalizedMessage.length > MAX_MESSAGE_LENGTH) throw new ApiError('Message is too long.', 400)
@@ -397,7 +421,7 @@ export async function sendMessage(senderId: string, conversationId: string, mess
     throw new ApiError('Messaging has been disabled for your account due to a policy violation.', 412)
   }
 
-  const { data: senderData } = await ensureMessagingAllowed(senderId)
+  const { data: senderData } = await ensureMessagingAllowed(senderId, actor)
   const db = getDb()
   const senderPublicSnap = await db.collection('publicProfiles').doc(senderId).get()
   const senderPublic = senderPublicSnap.data()

@@ -44,45 +44,34 @@ export async function POST(request: NextRequest) {
 
     if (access.hasNearbyAccess) {
       const maxDistance = Math.min(Math.max(requested, 5), MAX_NEARBY_RADIUS_MILES)
-      const matches = await findNearbyMatches(auth.uid, maxDistance, minCompatibility)
+      const { matches } = await findNearbyMatches(auth.uid, maxDistance, minCompatibility)
       return NextResponse.json({ matches })
     }
 
     if (body.previewCloseMatches) {
-      const previewMatches = await findNearbyMatches(
+      const { closeMatchCount } = await findNearbyMatches(
         auth.uid,
         CLOSE_MATCHES_THRESHOLD_MILES,
         minCompatibility,
+        { closeCountOnly: true },
       )
-      const closeMatches = previewMatches.filter((match) => {
-        const miles = readDistanceMiles(match as Record<string, unknown>)
-        return miles > 0 && miles < CLOSE_MATCHES_THRESHOLD_MILES
-      })
-      return NextResponse.json({
-        matches: closeMatches,
-        closeMatchCount: closeMatches.length,
-      })
+      return NextResponse.json({ matches: [], closeMatchCount })
     }
 
     const maxDistance = Math.min(
       Math.max(requested, UNSUBSCRIBED_MIN_RADIUS_MILES),
       MAX_NEARBY_RADIUS_MILES,
     )
-    const allMatches = await findNearbyMatches(auth.uid, maxDistance, minCompatibility)
+    const { matches: allMatches, closeMatchCount } = await findNearbyMatches(
+      auth.uid,
+      maxDistance,
+      minCompatibility,
+      { includeCloseCount: true },
+    )
     const matches = allMatches.filter((match) => {
       const miles = readDistanceMiles(match as Record<string, unknown>)
       return miles === 0 || miles >= CLOSE_MATCHES_THRESHOLD_MILES
     })
-
-    const closePreview = await findNearbyMatches(
-      auth.uid,
-      CLOSE_MATCHES_THRESHOLD_MILES,
-      minCompatibility,
-    )
-    const closeMatchCount = closePreview.filter((match) => {
-      const miles = readDistanceMiles(match as Record<string, unknown>)
-      return miles > 0 && miles < CLOSE_MATCHES_THRESHOLD_MILES
-    }).length
 
     return NextResponse.json({ matches, closeMatchCount })
   } catch (error) {

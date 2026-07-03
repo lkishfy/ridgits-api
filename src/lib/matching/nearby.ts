@@ -12,6 +12,20 @@ import {
   isVisibleInCommunity,
 } from '@/lib/matching/compatibility'
 import { normalizeQuizProgress } from '@/lib/matching/quiz-normalize'
+import { getVerifiedEmailMap } from '@/lib/trust-safety/email-verification'
+import { CLOSE_MATCHES_THRESHOLD_MILES } from '@/lib/ridgits-products'
+
+export type NearbyMatchScanOptions = {
+  /** Only count people within (0, CLOSE_MATCHES_THRESHOLD_MILES); do not return match payloads. */
+  closeCountOnly?: boolean
+  /** When true, track closeMatchCount while building the full match list in one pass. */
+  includeCloseCount?: boolean
+}
+
+export type NearbyMatchScanResult = {
+  matches: Record<string, unknown>[]
+  closeMatchCount: number
+}
 
 function demoAnswer(quiz: ReturnType<typeof normalizeQuizProgress>, key: string, fallbackIndex: number) {
   return quiz.answers[key] ?? quiz.answers[String(fallbackIndex)]
@@ -53,7 +67,13 @@ async function resolveCoords(
   return coords
 }
 
-export async function findNearbyMatches(uid: string, maxDistance = 50, minCompatibility = 5) {
+export async function findNearbyMatches(
+  uid: string,
+  maxDistance = 50,
+  minCompatibility = 5,
+  options: NearbyMatchScanOptions = {},
+): Promise<NearbyMatchScanResult> {
+  const { closeCountOnly = false, includeCloseCount = false } = options
   const db = getDb()
   const [userQuizSnap, userProfileSnap, userPublicSnap] = await Promise.all([
     db.collection('quizProgress').doc(uid).get(),
@@ -93,9 +113,16 @@ export async function findNearbyMatches(uid: string, maxDistance = 50, minCompat
 
   const completedSnap = await db.collection('quizProgress').where('completed', '==', true).get()
   const matches: Record<string, unknown>[] = []
+  let closeMatchCount = 0
+
+  const candidateUids = completedSnap.docs.map((doc) => doc.id).filter((id) => id !== uid)
+  const verifiedEmailMap = await getVerifiedEmailMap(candidateUids)
 
   for (const doc of completedSnap.docs) {
     if (doc.id === uid) continue
+    // Profiles with an unverified email never surface in community/matching, even if
+    // `visibleInCommunity` is true (trust & safety requirement).
+    if (verifiedEmailMap.get(doc.id) !== true) continue
     const otherQuiz = normalizeQuizProgress(doc.data())
 
     if (myGender !== undefined && myLookingFor !== undefined) {
@@ -145,8 +172,23 @@ export async function findNearbyMatches(uid: string, maxDistance = 50, minCompat
       distance = 0
     } else {
       distance = haversineMiles(myCoords.lat, myCoords.lng, otherCoords.lat, otherCoords.lng)
-      if (distance > maxDistance) continue
     }
+
+    const isCloseMatch =
+      distance > 0 && distance < CLOSE_MATCHES_THRESHOLD_MILES
+    if (isCloseMatch) {
+      closeMatchCount += 1
+    }
+
+    if (closeCountOnly) {
+      continue
+    }
+
+    if (isCloseMatch && includeCloseCount) {
+      continue
+    }
+
+    if (distance > maxDistance) continue
 
     matches.push({
       userId: doc.id,
@@ -167,6 +209,13 @@ export async function findNearbyMatches(uid: string, maxDistance = 50, minCompat
     })
   }
 
+  if (closeCountOnly) {
+    return { matches: [], closeMatchCount }
+  }
+
   matches.sort((a, b) => (b.overall as number) - (a.overall as number))
-  return matches.map(formatMatchForClient)
+  return {
+    matches: matches.map(formatMatchForClient),
+    closeMatchCount: includeCloseCount ? closeMatchCount : 0,
+  }
 }
