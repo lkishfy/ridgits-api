@@ -3,6 +3,20 @@ export const RIDGITS_BUNDLE_ID = process.env.APP_STORE_BUNDLE_ID ?? 'com.ridgits
 /** Non-renewing yearly nearby access — $29.99 */
 export const NEARBY_YEARLY_PRODUCT_ID = 'RidgitsNearbyYear2999'
 
+/** Matches closer than this require an active subscription. */
+export const CLOSE_MATCHES_THRESHOLD_MILES = 25
+
+/** Unsubscribed users can search between 25 and 150 miles. */
+export const UNSUBSCRIBED_MIN_RADIUS_MILES = 25
+
+export const MAX_NEARBY_RADIUS_MILES = 150
+
+/** @deprecated Use CLOSE_MATCHES_THRESHOLD_MILES */
+export const FREE_NEARBY_RADIUS_MILES = CLOSE_MATCHES_THRESHOLD_MILES
+
+/** @deprecated */
+export const NEARBY_PREVIEW_RADIUS_MILES = CLOSE_MATCHES_THRESHOLD_MILES
+
 /** All 10 archetype packs — $49.99 */
 export const ARCHETYPE_BUNDLE_PRODUCT_ID = 'RidgitsArchetypeBundle5000'
 
