@@ -13,6 +13,12 @@ import { isVisibleInCommunity } from '@/lib/matching/compatibility'
 import { requireAccountCooldownElapsed } from '@/lib/trust-safety/account-age'
 import { requireActiveSubscription } from '@/lib/trust-safety/subscription-gate'
 import { validateProfilePhotoUrl } from '@/lib/trust-safety/profile-photo'
+import {
+  getMonthlyMessageQuota,
+  reserveMonthlyMessageWithTransaction,
+} from '@/lib/messaging/monthly-quota'
+
+export { getMonthlyMessageQuota }
 
 export const MAX_MESSAGE_LENGTH = 2000
 export const DEFAULT_MAX_MESSAGES = 16
@@ -251,6 +257,7 @@ export async function startConversation(senderId: string, toUserId: string, mess
   const conversationId = conversationIdForUsers(senderId, toUserId)
   const conversationRef = db.collection('conversations').doc(conversationId)
   const messageRef = conversationRef.collection('messages').doc()
+  const senderTier = effectiveSubscriptionTier(senderData)
 
   await db.runTransaction(async (tx) => {
     const existing = await tx.get(conversationRef)
@@ -273,6 +280,8 @@ export async function startConversation(senderId: string, toUserId: string, mess
       }
       throw new ApiError('Conversation already exists.', 412)
     }
+
+    await reserveMonthlyMessageWithTransaction(tx, senderId, senderTier)
 
     tx.set(conversationRef, {
       participantIds: [senderId, toUserId],
@@ -425,6 +434,7 @@ export async function sendMessage(senderId: string, conversationId: string, mess
 
   const conversationRef = db.collection('conversations').doc(conversationId)
   const messageRef = conversationRef.collection('messages').doc()
+  const senderTier = effectiveSubscriptionTier(senderData)
 
   await db.runTransaction(async (tx) => {
     const snap = await tx.get(conversationRef)
@@ -459,6 +469,8 @@ export async function sendMessage(senderId: string, conversationId: string, mess
         412,
       )
     }
+
+    await reserveMonthlyMessageWithTransaction(tx, senderId, senderTier)
 
     const recipientId = (convo.participantIds as string[]).find((id) => id !== senderId)
     if (!recipientId) throw new ApiError('Conversation participants are invalid.', 412)
