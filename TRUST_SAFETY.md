@@ -29,9 +29,21 @@ static list. Keep it current with `npm update disposable-email-domains`.
 Enforced via **`POST /api/auth/validate-signup`** — an unauthenticated, IP-rate-limited
 endpoint the client calls *before* creating a Firebase Auth account (email/password or
 OAuth) so a modified/patched client can't bypass the check by skipping client-side
-validation. It also validates birth year (18+) when provided. iOS's `EmailAuthSheet` and
-the web `Login`/`PersonalityQuiz` pages should call this first; a fast local check still
-runs client-side for instant feedback, but the server call is authoritative.
+validation. It also validates birth year (18+) when provided (`email` and `birthYear` are
+each optional, so the same route covers pre-signup checks and post-OAuth birth-year
+confirmation).
+
+- **iOS** calls it from `AuthManager.createAccountWithEmail` (pre-signup) and
+  `AuthManager.completeBirthYear` (post-OAuth birth-year confirmation) via
+  `RidgitsAPIClient.validateSignup`, in addition to a curated client-side disposable-domain
+  list (`RidgitsDisposableEmail`) for instant feedback before the network round-trip.
+- **Web** does not currently call `ridgits-api` at all (it talks to Firebase directly, with
+  no established CORS/base-URL wiring to this API), so it only has the client-side curated
+  list (`utils/disposableEmail.js`) plus the Firestore-rules-enforced 18+ check below — a
+  patched web client *could* theoretically bypass the disposable-email list (client-side
+  JS can always be edited), which the iOS app cannot for the same check. Wiring the web
+  app to call `validate-signup` too would close that gap; it's a small addition (a `fetch`
+  to the API's public URL) once CORS is configured on `ridgits-api` for the web origin.
 
 ## 2. Verified email required for community actions
 
@@ -49,9 +61,13 @@ Enforced server-side in:
   results even if `visibleInCommunity` is `true`, via a batched `auth.getUsers()` lookup
   (`getVerifiedEmailMap`).
 
-Client should catch the `EMAIL_NOT_VERIFIED` error code (returned in the JSON body as
-`code`) and show a "verify your email" prompt with a resend button, instead of a generic
-error.
+**iOS**: `AuthManager.emailVerified` mirrors `Auth.auth().currentUser.isEmailVerified`
+(Firebase Auth's own record, not a spoofable Firestore field). `ProfileSettingsView` shows
+a "Verify your email" card with a resend button (`AuthManager.resendVerificationEmail`)
+for password accounts that haven't verified yet; Google/Apple accounts never see it since
+they're verified automatically. Poke/message call sites also surface the server's
+`EMAIL_NOT_VERIFIED` message directly (via `RidgitsError.serverCoded`) if a user tries the
+action before verifying.
 
 ## 3. Phone verification prep (not fully wired)
 
@@ -83,9 +99,9 @@ turned on without a redesign:
   email and Google sign-up.
 - **Server-side 18+ rejection**: `age.ts` exports `requireAdultBirthYear`, used by
   `POST /api/auth/validate-signup`. Because profile writes currently go straight from the
-  client to Firestore (no `ridgits-api` profile-save route exists yet), the same 18+ rule
+  client to Firestore (no `ridgits-api` profile-save route exists yet), the   same 18+ rule
   is mirrored at the Firestore Security Rules layer — see
-  `Ridgits/ridgits/firestore.rules` (`isAdultBirthYear`) on `users/{userId}` — which is
+  `Ridgits/ridgits/firestore.rules` (`hasValidAdultBirthYear`) on `users/{userId}` — which is
   genuinely server-enforced (Firestore rules run on Google's infrastructure, not the
   client) and can't be bypassed by a patched app binary. If/when a `ridgits-api`
   profile-save endpoint is added, call `requireAdultBirthYear` there too.
@@ -158,7 +174,9 @@ exists in the API).
 Premium, Ultra, Stripe or App Store, plus the `RIDGITS_BYPASS_EMAILS` QA bypass). Free
 users can still browse/match — **only** `sendPoke` and the messaging handlers
 (`startConversation`, `approveConversation`, `sendMessage`) are gated, returning
-`402 { code: "SUBSCRIPTION_REQUIRED" }`. iOS should catch this code and present
+`402 { code: "SUBSCRIPTION_REQUIRED" }`. iOS catches this code
+(`RidgitsError.serverCoded`) in `MatchesViewModel.sendPoke`, `MessagingViewModel.approve`/
+`sendMessage`, and the "message request" compose sheet, and presents
 `SubscriptionPaywallView` instead of a generic error toast.
 
 ## 9. Does Apple help with any of this by default?

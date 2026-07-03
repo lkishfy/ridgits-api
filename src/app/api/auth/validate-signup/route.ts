@@ -6,10 +6,13 @@ import { apiErrorResponse } from '@/lib/api-errors'
 
 /**
  * Pre-signup gate the client calls *before* creating a Firebase Auth account (email/password
- * or OAuth), so disposable emails / underage birth years / signup abuse are rejected
- * server-side rather than relying solely on client-side validation that a modified app
- * binary could bypass. This is unauthenticated by design (the account doesn't exist yet),
- * so it's IP rate-limited aggressively.
+ * or OAuth) and also after OAuth sign-in to confirm a birth year, so disposable emails /
+ * underage birth years / signup abuse are rejected server-side rather than relying solely
+ * on client-side validation that a modified app binary could bypass. `email` and
+ * `birthYear` are each optional (only what's supplied is checked), so the same endpoint
+ * covers "pre-account-creation email check" and "post-OAuth birth-year confirmation".
+ * This is unauthenticated by design (the account may not exist yet), so it's IP
+ * rate-limited aggressively.
  */
 export async function POST(request: NextRequest) {
   let body: { email?: string; birthYear?: number } = {}
@@ -30,17 +33,19 @@ export async function POST(request: NextRequest) {
       message: 'Too many signup attempts from this network. Please try again later.',
     })
 
-    const email = (body.email ?? '').trim()
-    if (!assertValidEmailFormat(email)) {
-      return NextResponse.json({ ok: false, error: 'Please enter a valid email address.', code: 'INVALID_EMAIL' })
-    }
+    if (body.email !== undefined) {
+      const email = body.email.trim()
+      if (!assertValidEmailFormat(email)) {
+        return NextResponse.json({ ok: false, error: 'Please enter a valid email address.', code: 'INVALID_EMAIL' })
+      }
 
-    if (isDisposableEmail(email)) {
-      return NextResponse.json({
-        ok: false,
-        error: 'Please use a valid, permanent email address.',
-        code: 'DISPOSABLE_EMAIL',
-      })
+      if (isDisposableEmail(email)) {
+        return NextResponse.json({
+          ok: false,
+          error: 'Please use a valid, permanent email address.',
+          code: 'DISPOSABLE_EMAIL',
+        })
+      }
     }
 
     if (body.birthYear !== undefined) {
