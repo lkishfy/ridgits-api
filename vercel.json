@@ -2,6 +2,15 @@
   "functions": {
     "src/app/api/matches/**/*.ts": {
       "maxDuration": 300
+    },
+    "src/app/api/notifications/cron/route.ts": {
+      "maxDuration": 300
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/notifications/cron",
+      "schedule": "0 * * * *"
+    }
+  ]
 }

@@ -1,3 +1,5 @@
+import { questionIdForIndex } from '@/lib/matching/quiz-question-ids'
+
 export interface NormalizedQuizProgress {
   answers: Record<string, unknown>
   preferredAnswers: Record<string, unknown>
@@ -5,6 +7,26 @@ export interface NormalizedQuizProgress {
   dealbreakers: Record<string, boolean>
   completed?: boolean
   archetype?: unknown
+}
+
+function isIdBasedKey(key: string): boolean {
+  return /^[a-z]/i.test(key)
+}
+
+function migrateQuestionKey(key: string): string {
+  if (isIdBasedKey(key)) return key
+  const index = parseInt(key, 10)
+  if (Number.isNaN(index)) return key
+  return questionIdForIndex(index)
+}
+
+function migrateStringKeyedMap<T>(map: Record<string, T>): Record<string, T> {
+  const migrated: Record<string, T> = {}
+  for (const [key, value] of Object.entries(map)) {
+    const id = migrateQuestionKey(key)
+    if (migrated[id] === undefined) migrated[id] = value
+  }
+  return migrated
 }
 
 /** Supports web flat maps and iOS nested `answers[id].{answer,preferredAnswers,...}`. */
@@ -45,10 +67,10 @@ export function normalizeQuizProgress(raw: Record<string, unknown>): NormalizedQ
   }
 
   return {
-    answers,
-    preferredAnswers,
-    importance,
-    dealbreakers,
+    answers: migrateStringKeyedMap(answers),
+    preferredAnswers: migrateStringKeyedMap(preferredAnswers),
+    importance: migrateStringKeyedMap(importance),
+    dealbreakers: migrateStringKeyedMap(dealbreakers),
     completed: raw.completed === true,
     archetype: raw.archetype,
   }

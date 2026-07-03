@@ -6,11 +6,48 @@ import {
   toArrayOrEmpty,
   arraysOverlap,
   formatMatchForClient,
+  isVisibleInCommunity,
 } from '@/lib/matching/compatibility'
 import { normalizeQuizProgress } from '@/lib/matching/quiz-normalize'
 
 export const NATIONWIDE_CACHE_TTL_MS = 24 * 60 * 60 * 1000
-export const NATIONWIDE_CACHE_VERSION = 6
+export const NATIONWIDE_CACHE_VERSION = 9
+
+async function validateNationwideMatches(matches: Record<string, unknown>[]) {
+  const db = getDb()
+  const valid: Record<string, unknown>[] = []
+
+  for (const match of matches) {
+    const userId = String(match.userId ?? '').trim()
+    if (!userId) continue
+
+    const [publicProfileSnap, userSnap] = await Promise.all([
+      db.collection('publicProfiles').doc(userId).get(),
+      db.collection('users').doc(userId).get(),
+    ])
+    if (!publicProfileSnap.exists || !userSnap.exists) continue
+
+    const profile = publicProfileSnap.data() ?? {}
+    const userData = userSnap.data() ?? {}
+    if (!isVisibleInCommunity(profile) || !isVisibleInCommunity(userData)) continue
+
+    const name = String(profile.name ?? match.name ?? '').trim()
+    const image = String(profile.image ?? match.image ?? '').trim()
+    const about = String(profile.about ?? match.about ?? '').trim()
+    if (!name || name.toLowerCase() === 'anonymous' || !image || !about) continue
+
+    valid.push({
+      ...match,
+      name,
+      image,
+      about,
+      location: profile.location ?? match.location ?? null,
+      interests: Array.isArray(profile.interests) ? profile.interests : match.interests ?? [],
+    })
+  }
+
+  return valid
+}
 
 function demoAnswer(quiz: ReturnType<typeof normalizeQuizProgress>, key: string, fallbackIndex: number) {
   return quiz.answers[key] ?? quiz.answers[String(fallbackIndex)]
@@ -27,7 +64,8 @@ export async function getTopNationwideMatches(uid: string, limit = 10) {
     const age = updatedAt ? Date.now() - updatedAt.toMillis() : Infinity
     if (age < NATIONWIDE_CACHE_TTL_MS && cache.version === NATIONWIDE_CACHE_VERSION) {
       const cached = (cache.matches as Record<string, unknown>[]) ?? []
-      return cached.slice(0, limit).map(formatMatchForClient)
+      const validated = await validateNationwideMatches(cached)
+      return validated.slice(0, limit).map(formatMatchForClient)
     }
   }
 
@@ -103,10 +141,11 @@ export async function computeTopNationwideMatchesInternal(uid: string) {
       db.collection('publicProfiles').doc(candidate.userId).get(),
       db.collection('users').doc(candidate.userId).get(),
     ])
-    if (!publicProfileSnap.exists) continue
+    if (!publicProfileSnap.exists || !otherProfileSnap.exists) continue
 
     const p = publicProfileSnap.data() ?? {}
     const otherUserProfile = otherProfileSnap.exists ? (otherProfileSnap.data() ?? {}) : {}
+    if (!isVisibleInCommunity(p) || !isVisibleInCommunity(otherUserProfile)) continue
 
     const name = String(p.name ?? '').trim()
     const image = String(p.image ?? '').trim()

@@ -7,9 +7,15 @@ import {
   resolveTransactionId,
 } from '@/lib/apple-jws'
 import {
+  ARCHETYPE_BUNDLE_PRODUCT_ID,
+  ARCHETYPE_PACK_IDS,
   NEARBY_PRODUCT_IDS,
   NEARBY_YEARLY_PRODUCT_ID,
+  PRODUCT_TO_PACK_ID,
   RIDGITS_BUNDLE_ID,
+  SUBSCRIPTION_PRODUCT_IDS,
+  SUPPORTED_IAP_PRODUCT_IDS,
+  TIER_RANK,
 } from '@/lib/ridgits-products'
 
 export interface LinkPurchaseInput {
@@ -67,9 +73,14 @@ export async function linkPurchase(input: LinkPurchaseInput): Promise<LinkPurcha
   const parsed = parseTransactionInput(input)
   const { transactionId, productId, originalTransactionId, subscriptionExpiration } = parsed
 
-  if (!NEARBY_PRODUCT_IDS.has(productId)) {
+  if (!SUPPORTED_IAP_PRODUCT_IDS.has(productId)) {
     throw new Error('Unsupported product')
   }
+
+  const packId = PRODUCT_TO_PACK_ID[productId]
+  const isBundle = productId === ARCHETYPE_BUNDLE_PRODUCT_ID
+  const isNearbyProduct = NEARBY_PRODUCT_IDS.has(productId)
+  const membership = SUBSCRIPTION_PRODUCT_IDS[productId]
 
   const db = getDb()
   const userRef = db.collection('users').doc(input.uid)
@@ -83,20 +94,17 @@ export async function linkPurchase(input: LinkPurchaseInput): Promise<LinkPurcha
       return { linked: true, idempotent: true }
     }
 
-    const expiration =
-      subscriptionExpiration ??
-      new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
+    const currentTier = String(userSnap.get('subscriptionTier') ?? 'free')
+    const currentRank = TIER_RANK[currentTier] ?? 0
+
+    if (membership && currentRank > TIER_RANK[membership.tier]) {
+      throw new Error('Downgrades are not supported. Cancel in Apple Subscriptions first.')
+    }
 
     const update: Record<string, unknown> = {
       processedTransactions: FieldValue.arrayUnion(transactionId),
       originalTransactionId,
       currentTransactionId: transactionId,
-      subscriptionProductId: productId,
-      isSubscribed: true,
-      subscriptionTier: 'nearby_yearly',
-      subscriptionSource: 'app_store',
-      subscriptionExpiresAt: expiration,
-      subscriptionExpiration: expiration,
       lastValidatedAt: FieldValue.serverTimestamp(),
     }
 
@@ -105,8 +113,53 @@ export async function linkPurchase(input: LinkPurchaseInput): Promise<LinkPurcha
       update.createdAt = FieldValue.serverTimestamp()
     }
 
-    if (productId === NEARBY_YEARLY_PRODUCT_ID) {
-      update.nearbyAccessGrantedAt = FieldValue.serverTimestamp()
+    if (isNearbyProduct) {
+      const expiration =
+        subscriptionExpiration ??
+        new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
+
+      Object.assign(update, {
+        subscriptionProductId: productId,
+        isSubscribed: true,
+        subscriptionTier: 'nearby_yearly',
+        subscriptionSource: 'app_store',
+        subscriptionExpiresAt: expiration,
+        subscriptionExpiration: expiration,
+      })
+
+      if (productId === NEARBY_YEARLY_PRODUCT_ID) {
+        update.nearbyAccessGrantedAt = FieldValue.serverTimestamp()
+      }
+    }
+
+    if (membership) {
+      const expiration = subscriptionExpiration ?? null
+      Object.assign(update, {
+        subscriptionProductId: productId,
+        isSubscribed: true,
+        subscriptionTier: membership.tier,
+        subscriptionBillingPeriod: membership.billing,
+        subscriptionSource: 'app_store',
+        subscriptionStatus: 'active',
+        hasEverBeenSubscribed: true,
+        subscriptionExpiresAt: expiration,
+        subscriptionExpiration: expiration,
+        subscriptionCurrentPeriodEnd: expiration,
+      })
+    }
+
+    if (packId) {
+      update.unlockedPacks = FieldValue.arrayUnion(packId)
+      update.purchasedPacks = FieldValue.arrayUnion(packId)
+      update.lastQuizPurchaseAt = FieldValue.serverTimestamp()
+    }
+
+    if (isBundle) {
+      const allPackIds = [...ARCHETYPE_PACK_IDS]
+      update.unlockedPacks = FieldValue.arrayUnion(...allPackIds)
+      update.purchasedPacks = FieldValue.arrayUnion(...allPackIds)
+      update.archetypeBundlePurchasedAt = FieldValue.serverTimestamp()
+      update.lastQuizPurchaseAt = FieldValue.serverTimestamp()
     }
 
     transaction.set(userRef, update, { merge: true })
@@ -144,8 +197,9 @@ export async function applyAppStoreNotification(input: {
   const expiresIso = resolveExpiresIso(payload)
   const productId = String(payload.productId ?? '').trim()
   const isNearbyProduct = NEARBY_PRODUCT_IDS.has(productId)
+  const membership = SUBSCRIPTION_PRODUCT_IDS[productId]
 
-  const activeTypes = new Set(['SUBSCRIBED', 'DID_RENEW', 'OFFER_REDEEMED'])
+  const activeTypes = new Set(['SUBSCRIBED', 'DID_RENEW', 'OFFER_REDEEMED', 'DID_CHANGE_RENEWAL_STATUS'])
   const inactiveTypes = new Set(['EXPIRED', 'GRACE_PERIOD_EXPIRED', 'REFUND', 'REVOKE'])
 
   if (activeTypes.has(notificationType) && isNearbyProduct) {
@@ -164,13 +218,34 @@ export async function applyAppStoreNotification(input: {
     return
   }
 
-  if (inactiveTypes.has(notificationType) || subtype === 'VOLUNTARY') {
+  if (activeTypes.has(notificationType) && membership) {
+    await userRef.set(
+      {
+        isSubscribed: true,
+        subscriptionSource: 'app_store',
+        subscriptionTier: membership.tier,
+        subscriptionBillingPeriod: membership.billing,
+        subscriptionStatus: 'active',
+        subscriptionExpiresAt: expiresIso,
+        subscriptionExpiration: expiresIso,
+        subscriptionCurrentPeriodEnd: expiresIso,
+        subscriptionProductId: productId,
+        hasEverBeenSubscribed: true,
+        lastValidatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    )
+    return
+  }
+
+  if ((inactiveTypes.has(notificationType) || subtype === 'VOLUNTARY') && (isNearbyProduct || membership)) {
     await userRef.set(
       {
         isSubscribed: false,
         subscriptionStatus: 'canceled',
         subscriptionExpiresAt: expiresIso ?? FieldValue.delete(),
         subscriptionExpiration: expiresIso ?? FieldValue.delete(),
+        subscriptionCurrentPeriodEnd: expiresIso ?? FieldValue.delete(),
       },
       { merge: true },
     )

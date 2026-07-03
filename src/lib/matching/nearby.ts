@@ -9,6 +9,7 @@ import {
   haversineMiles,
   geocodeLocation,
   formatMatchForClient,
+  isVisibleInCommunity,
 } from '@/lib/matching/compatibility'
 import { normalizeQuizProgress } from '@/lib/matching/quiz-normalize'
 
@@ -116,10 +117,12 @@ export async function findNearbyMatches(uid: string, maxDistance = 50, minCompat
       db.collection('publicProfiles').doc(doc.id).get(),
       db.collection('users').doc(doc.id).get(),
     ])
-    if (!publicSnap.exists) continue
+    if (!publicSnap.exists || !userSnap.exists) continue
 
     const p = publicSnap.data() ?? {}
     const otherUser = userSnap.exists ? (userSnap.data() ?? {}) : {}
+    if (!isVisibleInCommunity(p) || !isVisibleInCommunity(otherUser)) continue
+
     const name = String(p.name ?? '').trim()
     const image = String(p.image ?? '').trim()
     const about = String(p.about ?? '').trim()

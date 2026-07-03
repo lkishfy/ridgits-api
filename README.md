@@ -18,8 +18,19 @@ Firebase **Auth + Firestore** stay on project `ridgits-24f2d`.
 | POST | `/api/messaging/approve` | Approve conversation |
 | POST | `/api/messaging/send` | Send message |
 | POST | `/api/messaging/read` | Mark conversation read |
+| POST | `/api/notifications/register-device` | Register FCM device token |
+| DELETE | `/api/notifications/register-device` | Remove device token |
+| GET | `/api/notifications/preferences` | Fetch push preferences |
+| PATCH | `/api/notifications/preferences` | Update push preferences |
+| POST | `/api/notifications/preferences` | Record notification open |
+| GET/POST | `/api/notifications/cron` | Hourly engagement cron (`CRON_SECRET`) |
+| POST | `/api/pokes/send` | Send poke + push |
+| POST | `/api/pokes/seen` | Mark poke seen |
+| POST | `/api/pokes/unpoke` | Remove poke |
 
 All authenticated routes use `Authorization: Bearer <Firebase ID token>`.
+
+Push delivery uses `firebase-admin/messaging`. See `Ridgits-iOS/NOTIFICATIONS_SETUP.md` for APNs/FCM manual setup.
 
 ## Setup
 

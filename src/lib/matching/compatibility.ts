@@ -12,12 +12,22 @@ function isDemographicQuestionKey(key: string): boolean {
 }
 
 function getQuestionCategory(questionId: string): string | null {
-  if (questionId.startsWith('comm_')) return 'communication'
-  if (questionId.startsWith('intm_')) return 'intimacy'
-  if (questionId.startsWith('vals_')) return 'values'
-  if (questionId.startsWith('socl_')) return 'social'
-  if (questionId.startsWith('comt_')) return 'commitment'
+  const id = questionId.replace(/^ll_/, '')
+  if (id.startsWith('comm_') || id.startsWith('spicy_comm_')) return 'communication'
+  if (id.startsWith('intm_') || id.startsWith('msg_') || id.startsWith('bnd_')) return 'intimacy'
+  if (id.startsWith('vals_') || id.startsWith('spicy_vals_')) return 'values'
+  if (id.startsWith('socl_')) return 'social'
+  if (id.startsWith('comt_')) return 'commitment'
   return null
+}
+
+function readScore(value: unknown): number | undefined {
+  if (typeof value === 'number' && !Number.isNaN(value)) return Math.round(value)
+  if (typeof value === 'string') {
+    const parsed = parseInt(value, 10)
+    if (!Number.isNaN(parsed)) return parsed
+  }
+  return undefined
 }
 
 export interface CompatibilityResult {
@@ -157,18 +167,50 @@ export async function geocodeLocation(locationString: string): Promise<{ lat: nu
   }
 }
 
+export function isVisibleInCommunity(profile: Record<string, unknown> | null | undefined): boolean {
+  return profile?.visibleInCommunity !== false
+}
+
 export function formatMatchForClient(match: Record<string, unknown>) {
-  const compat = match.compatibility as Record<string, number> | undefined
+  const rawCompat = match.compatibility as Record<string, unknown> | undefined
+  const nestedOverall = readScore(rawCompat?.overall)
+  const nestedCommunication = readScore(rawCompat?.communication)
+  const hasNestedCompat =
+    nestedOverall !== undefined ||
+    nestedCommunication !== undefined ||
+    readScore(rawCompat?.intimacy) !== undefined
+
+  const overall =
+    nestedOverall ??
+    readScore(match.overall) ??
+    readScore(match.compatibilityScore) ??
+    0
+
+  const compatibility = {
+    overall,
+    communication:
+      nestedCommunication ?? readScore(match.communication) ?? readScore(rawCompat?.communication) ?? 0,
+    intimacy: readScore(rawCompat?.intimacy) ?? readScore(match.intimacy) ?? 0,
+    values: readScore(rawCompat?.values) ?? readScore(match.values) ?? 0,
+    social: readScore(rawCompat?.social) ?? readScore(match.social) ?? 0,
+    commitment: readScore(rawCompat?.commitment) ?? readScore(match.commitment) ?? 0,
+  }
+
+  if (!hasNestedCompat && overall === 0) {
+    const topLevelSum =
+      compatibility.communication +
+      compatibility.intimacy +
+      compatibility.values +
+      compatibility.social +
+      compatibility.commitment
+    if (topLevelSum > 0 && compatibility.overall === 0) {
+      compatibility.overall = Math.round(topLevelSum / 5)
+    }
+  }
+
   return {
     ...match,
-    compatibility: compat ?? {
-      overall: match.overall ?? 0,
-      communication: match.communication ?? 0,
-      intimacy: match.intimacy ?? 0,
-      values: match.values ?? 0,
-      social: match.social ?? 0,
-      commitment: match.commitment ?? 0,
-    },
-    compatibilityScore: compat?.overall ?? match.overall ?? 0,
+    compatibility,
+    compatibilityScore: overall > 0 ? overall : compatibility.overall,
   }
 }

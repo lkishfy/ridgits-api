@@ -1,5 +1,6 @@
 import { FieldValue, Timestamp } from 'firebase-admin/firestore'
 import { ApiError } from '@/lib/api-errors'
+import { sendEngagementPush } from '@/lib/push-notifications'
 import { getDb } from '@/lib/firebase-admin'
 import {
   checkProfanity,
@@ -7,6 +8,7 @@ import {
   previewText,
   conversationIdForUsers,
 } from '@/lib/messaging/profanity'
+import { isVisibleInCommunity } from '@/lib/matching/compatibility'
 
 export const MAX_MESSAGE_LENGTH = 2000
 export const DEFAULT_MAX_MESSAGES = 16
@@ -44,6 +46,13 @@ async function ensureMessagingAllowed(uid: string) {
   if (!profileSnap.exists) throw new ApiError('You must complete your profile before messaging.', 412)
 
   const profile = profileSnap.data() ?? {}
+  if (!isVisibleInCommunity(profile) || !isVisibleInCommunity(userSnap.data())) {
+    throw new ApiError(
+      'Turn on community visibility in your profile to send messages.',
+      412,
+    )
+  }
+
   const name = String(profile.name ?? '').trim()
   const image = String(profile.image ?? '').trim()
   const about = String(profile.about ?? '').trim()
@@ -205,14 +214,18 @@ export async function startConversation(senderId: string, toUserId: string, mess
   const recipientSnap = await ensureUserExists(toUserId)
   if (!recipientSnap) throw new ApiError('Recipient not found.', 404)
   const recipientData = recipientSnap.data() ?? {}
+  const recipientPublicSnap = await getDb().collection('publicProfiles').doc(toUserId).get()
+  if (
+    !isVisibleInCommunity(recipientData) ||
+    !isVisibleInCommunity(recipientPublicSnap.data())
+  ) {
+    throw new ApiError('This user is not accepting messages right now.', 403)
+  }
 
   await ensureNoMutualBlocks(senderId, toUserId)
 
   const db = getDb()
-  const [senderPublicSnap, recipientPublicSnap] = await Promise.all([
-    db.collection('publicProfiles').doc(senderId).get(),
-    db.collection('publicProfiles').doc(toUserId).get(),
-  ])
+  const senderPublicSnap = await db.collection('publicProfiles').doc(senderId).get()
 
   const conversationId = conversationIdForUsers(senderId, toUserId)
   const conversationRef = db.collection('conversations').doc(conversationId)
@@ -278,6 +291,21 @@ export async function startConversation(senderId: string, toUserId: string, mess
     })
   })
 
+  const senderName = getParticipantDisplayName(senderData, senderPublicSnap.data())
+  await sendEngagementPush({
+    userId: toUserId,
+    category: 'messageRequests',
+    type: 'message_request',
+    title: `${senderName} wants to message you`,
+    body: previewText(normalizedMessage),
+    collapseKey: `message-request-${conversationId}`,
+    data: {
+      route: 'messages',
+      conversationId,
+      fromUserId: senderId,
+    },
+  })
+
   return { conversationId }
 }
 
@@ -330,6 +358,25 @@ export async function approveConversation(userId: string, conversationId: string
       tx.update(doc.ref, { requiresApproval: false, releasedAt: now })
     })
   })
+
+  const snap = await conversationRef.get()
+  const convo = snap.data() ?? {}
+  const initiatorId = String(convo.initiatorId ?? '')
+  const approverName = String(convo.participants?.[userId]?.displayName ?? 'Your match')
+  if (initiatorId && initiatorId !== userId) {
+    await sendEngagementPush({
+      userId: initiatorId,
+      category: 'conversationApproved',
+      type: 'conversation_approved',
+      title: `${approverName} approved your message`,
+      body: 'You have 24 hours and 16 messages to connect. Make it count.',
+      collapseKey: `approved-${conversationId}`,
+      data: {
+        route: 'messages',
+        conversationId,
+      },
+    })
+  }
 
   return { conversationId, status: 'active' }
 }
@@ -418,6 +465,26 @@ export async function sendMessage(senderId: string, conversationId: string, mess
       messageCount: FieldValue.increment(1),
     })
   })
+
+  const snap = await conversationRef.get()
+  const convo = snap.data() ?? {}
+  const recipientId = (convo.participantIds as string[] | undefined)?.find((id) => id !== senderId)
+  const senderName = getParticipantDisplayName(senderData, senderPublic)
+  if (recipientId) {
+    await sendEngagementPush({
+      userId: recipientId,
+      category: 'messages',
+      type: 'message',
+      title: `New message from ${senderName}`,
+      body: previewText(normalizedMessage),
+      collapseKey: `message-${conversationId}`,
+      data: {
+        route: 'messages',
+        conversationId,
+        fromUserId: senderId,
+      },
+    })
+  }
 
   return { conversationId, messageId: messageRef.id }
 }
