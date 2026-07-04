@@ -99,10 +99,9 @@ export const NEARBY_PRODUCT_IDS = new Set([NEARBY_YEARLY_PRODUCT_ID])
 
 /** Consumable poke packs — credits added to `users.pokeCreditBalance`. */
 export const POKE_PACK_PRODUCT_IDS: Record<string, number> = {
-  /** 10 pokes — $4.99 in App Store Connect (displayed as $5) */
+  RidgitsPokes5Pack: 5,
   RidgitsPokes10Pack: 10,
   RidgitsPokes25Pack: 25,
-  RidgitsPokes60Pack: 60,
 }
 
 export const POKE_PACK_PRODUCT_ID_SET = new Set(Object.keys(POKE_PACK_PRODUCT_IDS))
