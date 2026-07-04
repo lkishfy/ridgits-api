@@ -1,5 +1,6 @@
 import { FieldValue } from 'firebase-admin/firestore'
 import { getDb } from '@/lib/firebase-admin'
+import { purgeLockedPackQuizData } from '@/lib/ridgits-pack-access'
 import { hasActiveSubscriptionAccess } from '@/lib/ridgits-subscription'
 
 const PAID_TIERS = new Set(['plus', 'premium', 'ultra', 'nearby_yearly'])
@@ -120,6 +121,8 @@ export async function revokeSubscriptionBadge(input: {
     source: input.source,
     metadata: input.metadata,
   })
+
+  await purgeLockedPackQuizData(input.uid)
 
   return {
     revoked: true,

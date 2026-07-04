@@ -43,22 +43,18 @@ function usageRef(uid: string, periodKey: string) {
   return getDb().collection('users').doc(uid).collection('messageUsage').doc(periodKey)
 }
 
+/** Messaging has no monthly send cap — only per-conversation limits (16 messages / 24h). */
 export async function getMonthlyMessageQuota(
-  uid: string,
+  _uid: string,
   userData: Record<string, unknown>,
 ): Promise<MonthlyMessageQuota> {
   const tier = effectiveSubscriptionTier(userData)
-  const limit = monthlyMessageLimitForTier(tier)
-  const periodKey = currentMessageUsagePeriodKey()
-  const snap = await usageRef(uid, periodKey).get()
-  const sentCount = typeof snap.data()?.sentCount === 'number' ? snap.data()!.sentCount : 0
-
   return {
-    periodKey,
-    sentCount,
-    limit,
-    remaining: limit === null ? null : Math.max(0, limit - sentCount),
-    unlimited: limit === null,
+    periodKey: currentMessageUsagePeriodKey(),
+    sentCount: 0,
+    limit: null,
+    remaining: null,
+    unlimited: true,
     resetsAt: nextMessageUsagePeriodStartISO(),
     tier,
   }

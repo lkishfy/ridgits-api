@@ -7,6 +7,8 @@ import {
   CLOSE_MATCHES_THRESHOLD_MILES,
   MAX_NEARBY_RADIUS_MILES,
   UNSUBSCRIBED_MIN_RADIUS_MILES,
+  nearbyCloseMatchFloorMiles,
+  nearbySearchMinRadiusMiles,
 } from '@/lib/ridgits-products'
 
 export const maxDuration = 300
@@ -43,9 +45,19 @@ export async function POST(request: NextRequest) {
         : UNSUBSCRIBED_MIN_RADIUS_MILES
 
     if (access.hasNearbyAccess) {
-      const maxDistance = Math.min(Math.max(requested, 5), MAX_NEARBY_RADIUS_MILES)
+      const tier = access.subscriptionTier ?? 'free'
+      const minRadius = nearbySearchMinRadiusMiles(tier)
+      const floor = nearbyCloseMatchFloorMiles(tier, true)
+      const maxDistance = Math.min(Math.max(requested, minRadius), MAX_NEARBY_RADIUS_MILES)
       const { matches } = await findNearbyMatches(auth.uid, maxDistance, minCompatibility)
-      return NextResponse.json({ matches })
+      const filtered =
+        floor > 0
+          ? matches.filter((match) => {
+              const miles = readDistanceMiles(match as Record<string, unknown>)
+              return miles === 0 || miles >= floor
+            })
+          : matches
+      return NextResponse.json({ matches: filtered })
     }
 
     if (body.previewCloseMatches) {

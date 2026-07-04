@@ -4,25 +4,31 @@ import { effectiveSubscriptionTier } from '@/lib/subscription-badge'
 import { sendEngagementPush } from '@/lib/push-notifications'
 import { getDb } from '@/lib/firebase-admin'
 import {
-  checkProfanity,
   normalizeMessage,
   previewText,
   conversationIdForUsers,
 } from '@/lib/messaging/profanity'
+import {
+  MAX_MESSAGE_LENGTH,
+  DEFAULT_MAX_MESSAGES,
+  DEFAULT_SUSPENSION_MINUTES,
+} from '@/lib/messaging/constants'
 import { isVisibleInCommunity } from '@/lib/matching/compatibility'
 import { requireAccountCooldownElapsed } from '@/lib/trust-safety/account-age'
+import { requireUserBirthYearOnFile } from '@/lib/trust-safety/age'
 import { requireActiveSubscription } from '@/lib/trust-safety/subscription-gate'
 import { validateProfilePhotoUrl } from '@/lib/trust-safety/profile-photo'
 import {
   getMonthlyMessageQuota,
-  reserveMonthlyMessageWithTransaction,
 } from '@/lib/messaging/monthly-quota'
+import {
+  enforceDmTextBeforeSend,
+  flagConversationForReview,
+  recordSentMessageModeration,
+} from '@/lib/messaging/moderation-enforcement'
 
 export { getMonthlyMessageQuota }
-
-export const MAX_MESSAGE_LENGTH = 2000
-export const DEFAULT_MAX_MESSAGES = 16
-export const DEFAULT_SUSPENSION_MINUTES = 3
+export { MAX_MESSAGE_LENGTH, DEFAULT_MAX_MESSAGES, DEFAULT_SUSPENSION_MINUTES } from '@/lib/messaging/constants'
 
 function getParticipantDisplayName(data: Record<string, unknown>, publicProfile?: Record<string, unknown>) {
   const publicName = String(publicProfile?.name ?? '').trim()
@@ -64,6 +70,8 @@ async function ensureMessagingAllowed(uid: string, actor: MessagingActor) {
 
   const userSnap = await ensureUserExists(uid)
   if (!userSnap) throw new ApiError('You must complete your profile before messaging.', 412, 'USER_NOT_FOUND')
+
+  await requireUserBirthYearOnFile(uid)
 
   const profileSnap = await getDb().collection('publicProfiles').doc(uid).get()
   if (!profileSnap.exists) throw new ApiError('You must complete your profile before messaging.', 412)
@@ -226,15 +234,12 @@ export async function startConversation(senderId: string, toUserId: string, mess
   if (!normalizedMessage) throw new ApiError('Message cannot be empty.', 400)
   if (normalizedMessage.length > MAX_MESSAGE_LENGTH) throw new ApiError('Message is too long.', 400)
 
-  const profanityCheck = checkProfanity(normalizedMessage)
-  if (profanityCheck.isProfane) {
-    await suspendMessagingForUser(senderId, {
-      summary: 'Messaging suspended due to inappropriate language.',
-      matches: profanityCheck.matches,
-      preview: previewText(profanityCheck.normalized),
-    })
-    throw new ApiError('Messaging has been disabled for your account due to a policy violation.', 412)
-  }
+  const dmAnalysis = await enforceDmTextBeforeSend(
+    senderId,
+    normalizedMessage,
+    suspendMessagingForUser,
+    { recipientId: toUserId },
+  )
 
   const { data: senderData } = await ensureMessagingAllowed(senderId, actor)
   requireAccountCooldownElapsed(senderData)
@@ -257,7 +262,6 @@ export async function startConversation(senderId: string, toUserId: string, mess
   const conversationId = conversationIdForUsers(senderId, toUserId)
   const conversationRef = db.collection('conversations').doc(conversationId)
   const messageRef = conversationRef.collection('messages').doc()
-  const senderTier = effectiveSubscriptionTier(senderData)
 
   await db.runTransaction(async (tx) => {
     const existing = await tx.get(conversationRef)
@@ -280,8 +284,6 @@ export async function startConversation(senderId: string, toUserId: string, mess
       }
       throw new ApiError('Conversation already exists.', 412)
     }
-
-    await reserveMonthlyMessageWithTransaction(tx, senderId, senderTier)
 
     tx.set(conversationRef, {
       participantIds: [senderId, toUserId],
@@ -319,6 +321,15 @@ export async function startConversation(senderId: string, toUserId: string, mess
       status: 'sent',
       requiresApproval: true,
     })
+  })
+
+  await recordSentMessageModeration({
+    senderId,
+    recipientId: toUserId,
+    conversationId,
+    messageId: messageRef.id,
+    text: normalizedMessage,
+    analysis: dmAnalysis,
   })
 
   const senderName = getParticipantDisplayName(senderData, senderPublicSnap.data())
@@ -416,25 +427,25 @@ export async function sendMessage(senderId: string, conversationId: string, mess
   if (!normalizedMessage) throw new ApiError('Message cannot be empty.', 400)
   if (normalizedMessage.length > MAX_MESSAGE_LENGTH) throw new ApiError('Message is too long.', 400)
 
-  const profanityCheck = checkProfanity(normalizedMessage)
-  if (profanityCheck.isProfane) {
-    await suspendMessagingForUser(senderId, {
-      summary: 'Messaging suspended due to inappropriate language.',
-      matches: profanityCheck.matches,
-      preview: previewText(profanityCheck.normalized),
-      conversationId,
-    })
-    throw new ApiError('Messaging has been disabled for your account due to a policy violation.', 412)
-  }
+  const db = getDb()
+  const conversationRef = db.collection('conversations').doc(conversationId)
+  const preSnap = await conversationRef.get()
+  if (!preSnap.exists) throw new ApiError('Conversation not found.', 404)
+  const preConvo = preSnap.data() ?? {}
+  const preRecipientId = (preConvo.participantIds as string[] | undefined)?.find((id) => id !== senderId)
+
+  const dmAnalysis = await enforceDmTextBeforeSend(
+    senderId,
+    normalizedMessage,
+    suspendMessagingForUser,
+    { conversationId, recipientId: preRecipientId },
+  )
 
   const { data: senderData } = await ensureMessagingAllowed(senderId, actor)
-  const db = getDb()
   const senderPublicSnap = await db.collection('publicProfiles').doc(senderId).get()
   const senderPublic = senderPublicSnap.data()
 
-  const conversationRef = db.collection('conversations').doc(conversationId)
   const messageRef = conversationRef.collection('messages').doc()
-  const senderTier = effectiveSubscriptionTier(senderData)
 
   await db.runTransaction(async (tx) => {
     const snap = await tx.get(conversationRef)
@@ -469,8 +480,6 @@ export async function sendMessage(senderId: string, conversationId: string, mess
         412,
       )
     }
-
-    await reserveMonthlyMessageWithTransaction(tx, senderId, senderTier)
 
     const recipientId = (convo.participantIds as string[]).find((id) => id !== senderId)
     if (!recipientId) throw new ApiError('Conversation participants are invalid.', 412)
@@ -517,10 +526,21 @@ export async function sendMessage(senderId: string, conversationId: string, mess
         fromUserId: senderId,
       },
     })
+
+    await recordSentMessageModeration({
+      senderId,
+      recipientId,
+      conversationId,
+      messageId: messageRef.id,
+      text: normalizedMessage,
+      analysis: dmAnalysis,
+    })
   }
 
   return { conversationId, messageId: messageRef.id }
 }
+
+export { flagConversationForReview as flagConversation }
 
 export async function markConversationRead(userId: string, conversationId: string) {
   const userSnap = await ensureUserExists(userId)

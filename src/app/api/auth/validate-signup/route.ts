@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { isDisposableEmail, assertValidEmailFormat } from '@/lib/trust-safety/disposable-email'
 import { isValidBirthYear, computeAge, MINIMUM_AGE_YEARS } from '@/lib/trust-safety/age'
 import { enforceRateLimit, getClientIp } from '@/lib/trust-safety/rate-limit'
+import { publicApiCorsHeaders } from '@/lib/trust-safety/cors'
 import { apiErrorResponse } from '@/lib/api-errors'
 
 /**
@@ -14,12 +15,21 @@ import { apiErrorResponse } from '@/lib/api-errors'
  * This is unauthenticated by design (the account may not exist yet), so it's IP
  * rate-limited aggressively.
  */
+export async function OPTIONS(request: NextRequest) {
+  return new NextResponse(null, {
+    status: 204,
+    headers: publicApiCorsHeaders(request),
+  })
+}
+
 export async function POST(request: NextRequest) {
+  const cors = publicApiCorsHeaders(request)
+
   let body: { email?: string; birthYear?: number } = {}
   try {
     body = await request.json()
   } catch {
-    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400, headers: cors })
   }
 
   const ip = getClientIp(request)
@@ -36,37 +46,55 @@ export async function POST(request: NextRequest) {
     if (body.email !== undefined) {
       const email = body.email.trim()
       if (!assertValidEmailFormat(email)) {
-        return NextResponse.json({ ok: false, error: 'Please enter a valid email address.', code: 'INVALID_EMAIL' })
+        return NextResponse.json(
+          { ok: false, error: 'Please enter a valid email address.', code: 'INVALID_EMAIL' },
+          { headers: cors },
+        )
       }
 
       if (isDisposableEmail(email)) {
-        return NextResponse.json({
-          ok: false,
-          error: 'Please use a valid, permanent email address.',
-          code: 'DISPOSABLE_EMAIL',
-        })
+        return NextResponse.json(
+          {
+            ok: false,
+            error: 'Please use a valid, permanent email address.',
+            code: 'DISPOSABLE_EMAIL',
+          },
+          { headers: cors },
+        )
       }
     }
 
     if (body.birthYear !== undefined) {
       if (!isValidBirthYear(body.birthYear)) {
-        return NextResponse.json({ ok: false, error: 'Please enter a valid birth year.', code: 'INVALID_BIRTH_YEAR' })
+        return NextResponse.json(
+          { ok: false, error: 'Please enter a valid birth year.', code: 'INVALID_BIRTH_YEAR' },
+          { headers: cors },
+        )
       }
       if (computeAge(body.birthYear) < MINIMUM_AGE_YEARS) {
-        return NextResponse.json({
-          ok: false,
-          error: 'You must be at least 18 years old to use Ridgits.',
-          code: 'UNDERAGE',
-        })
+        return NextResponse.json(
+          {
+            ok: false,
+            error: 'You must be at least 18 years old to use Ridgits.',
+            code: 'UNDERAGE',
+          },
+          { headers: cors },
+        )
       }
     }
 
-    return NextResponse.json({ ok: true })
+    return NextResponse.json({ ok: true }, { headers: cors })
   } catch (error) {
     const { message, status, code, retryAfterSeconds } = apiErrorResponse(error)
     return NextResponse.json(
       { ok: false, error: message, code },
-      { status, headers: retryAfterSeconds ? { 'Retry-After': String(retryAfterSeconds) } : undefined },
+      {
+        status,
+        headers: {
+          ...cors,
+          ...(retryAfterSeconds ? { 'Retry-After': String(retryAfterSeconds) } : {}),
+        },
+      },
     )
   }
 }

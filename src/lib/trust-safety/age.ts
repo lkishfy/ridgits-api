@@ -1,4 +1,5 @@
 import { ApiError } from '@/lib/api-errors'
+import { getDb } from '@/lib/firebase-admin'
 
 export const MINIMUM_AGE_YEARS = 18
 
@@ -29,4 +30,39 @@ export function requireAdultBirthYear(birthYear: unknown): number {
     throw new ApiError('Please provide a valid birth year.', 400, 'INVALID_BIRTH_YEAR')
   }
   return age
+}
+
+function parseBirthYearFromUserData(data: Record<string, unknown> | undefined): number | null {
+  if (!data) return null
+  const raw = data.birthYear
+  if (typeof raw === 'number' && Number.isInteger(raw)) return raw
+  if (typeof raw === 'string') {
+    const parsed = Number.parseInt(raw, 10)
+    return Number.isInteger(parsed) ? parsed : null
+  }
+  return null
+}
+
+/**
+ * Requires a verified 18+ birth year stored on `users/{uid}`.
+ * Used on authenticated routes so a modified client can't skip onboarding gates.
+ */
+export async function requireUserBirthYearOnFile(uid: string): Promise<number> {
+  const snap = await getDb().collection('users').doc(uid).get()
+  if (!snap.exists) {
+    throw new ApiError(
+      'Please confirm your birth year to continue. You must be 18 or older to use Ridgits.',
+      403,
+      'AGE_VERIFICATION_REQUIRED',
+    )
+  }
+  const birthYear = parseBirthYearFromUserData(snap.data())
+  if (birthYear === null) {
+    throw new ApiError(
+      'Please confirm your birth year to continue. You must be 18 or older to use Ridgits.',
+      403,
+      'AGE_VERIFICATION_REQUIRED',
+    )
+  }
+  return requireAdultBirthYear(birthYear)
 }

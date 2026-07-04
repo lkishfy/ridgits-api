@@ -11,12 +11,14 @@ import {
   ARCHETYPE_PACK_IDS,
   NEARBY_PRODUCT_IDS,
   NEARBY_YEARLY_PRODUCT_ID,
+  POKE_PACK_PRODUCT_IDS,
   PRODUCT_TO_PACK_ID,
   RIDGITS_BUNDLE_ID,
   SUBSCRIPTION_PRODUCT_IDS,
   SUPPORTED_IAP_PRODUCT_IDS,
   TIER_RANK,
 } from '@/lib/ridgits-products'
+import { purgeLockedPackQuizData } from '@/lib/ridgits-pack-access'
 import { revokeSubscriptionBadge } from '@/lib/subscription-badge'
 
 export interface LinkPurchaseInput {
@@ -82,6 +84,7 @@ export async function linkPurchase(input: LinkPurchaseInput): Promise<LinkPurcha
   const isBundle = productId === ARCHETYPE_BUNDLE_PRODUCT_ID
   const isNearbyProduct = NEARBY_PRODUCT_IDS.has(productId)
   const membership = SUBSCRIPTION_PRODUCT_IDS[productId]
+  const pokeCredits = POKE_PACK_PRODUCT_IDS[productId]
 
   const db = getDb()
   const userRef = db.collection('users').doc(input.uid)
@@ -161,6 +164,11 @@ export async function linkPurchase(input: LinkPurchaseInput): Promise<LinkPurcha
       update.purchasedPacks = FieldValue.arrayUnion(...allPackIds)
       update.archetypeBundlePurchasedAt = FieldValue.serverTimestamp()
       update.lastQuizPurchaseAt = FieldValue.serverTimestamp()
+    }
+
+    if (pokeCredits) {
+      update.pokeCreditBalance = FieldValue.increment(pokeCredits)
+      update.lastPokePackPurchaseAt = FieldValue.serverTimestamp()
     }
 
     transaction.set(userRef, update, { merge: true })
@@ -251,6 +259,7 @@ export async function applyAppStoreNotification(input: {
       },
       { merge: true },
     )
+    await purgeLockedPackQuizData(userRef.id)
     return
   }
 
@@ -271,6 +280,7 @@ export async function applyAppStoreNotification(input: {
       },
       { merge: true },
     )
+    await purgeLockedPackQuizData(userRef.id)
     return
   }
 

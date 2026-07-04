@@ -4,8 +4,9 @@ import { sendEngagementPush } from '@/lib/push-notifications'
 import { getDb } from '@/lib/firebase-admin'
 import { isVisibleInCommunity } from '@/lib/matching/compatibility'
 import { requireAccountCooldownElapsed } from '@/lib/trust-safety/account-age'
-import { requireActiveSubscription } from '@/lib/trust-safety/subscription-gate'
+import { requireUserBirthYearOnFile } from '@/lib/trust-safety/age'
 import { validateProfilePhotoUrl } from '@/lib/trust-safety/profile-photo'
+import { getPokeCreditBalance, reservePokeCreditWithTransaction } from '@/lib/pokes/poke-credits'
 
 async function getDisplayName(uid: string): Promise<string> {
   const snap = await getDb().collection('publicProfiles').doc(uid).get()
@@ -38,6 +39,8 @@ export async function sendPoke(
     )
   }
 
+  await requireUserBirthYearOnFile(senderId)
+
   const db = getDb()
   const [senderSnap, recipientSnap, senderPublicSnap, recipientPublicSnap] = await Promise.all([
     db.collection('users').doc(senderId).get(),
@@ -61,7 +64,6 @@ export async function sendPoke(
     throw new ApiError(photoCheck.reason ?? 'A valid profile photo is required to send pokes.', 412, 'INVALID_PROFILE_PHOTO')
   }
 
-  await requireActiveSubscription(senderId, actor.email)
   requireAccountCooldownElapsed(senderSnap.data())
 
   await ensureNoMutualBlocks(senderId, toUserId)
@@ -76,6 +78,10 @@ export async function sendPoke(
   if (!existing.empty) {
     return { pokeId: existing.docs[0]!.id, alreadySent: true }
   }
+
+  await db.runTransaction(async (tx) => {
+    await reservePokeCreditWithTransaction(tx, senderId)
+  })
 
   const [fromName, toName] = await Promise.all([getDisplayName(senderId), getDisplayName(toUserId)])
   const ref = await db.collection('pokes').add({
@@ -105,6 +111,8 @@ export async function sendPoke(
 
   return { pokeId: ref.id, alreadySent: false }
 }
+
+export { getPokeCreditBalance as getPokeCredits }
 
 export async function markPokeSeen(userId: string, pokeId: string) {
   const db = getDb()

@@ -3,13 +3,44 @@ export const RIDGITS_BUNDLE_ID = process.env.APP_STORE_BUNDLE_ID ?? 'com.ridgits
 /** Non-renewing yearly nearby access — $29.99 */
 export const NEARBY_YEARLY_PRODUCT_ID = 'RidgitsNearbyYear2999'
 
-/** Matches closer than this require an active subscription. */
+/** Matches closer than this are hidden for free users. */
 export const CLOSE_MATCHES_THRESHOLD_MILES = 25
+
+/** Ridgits+ minimum search radius (mi). */
+export const PLUS_MIN_RADIUS_MILES = 25
 
 /** Unsubscribed users can search between 25 and 150 miles. */
 export const UNSUBSCRIBED_MIN_RADIUS_MILES = 25
 
 export const MAX_NEARBY_RADIUS_MILES = 150
+
+export function nearbySearchMinRadiusMiles(tier: string | null | undefined): number {
+  switch (tier) {
+    case 'plus':
+      return PLUS_MIN_RADIUS_MILES
+    case 'premium':
+    case 'ultra':
+      return 0
+    default:
+      return UNSUBSCRIBED_MIN_RADIUS_MILES
+  }
+}
+
+export function nearbyCloseMatchFloorMiles(
+  tier: string | null | undefined,
+  hasNearbyAccess: boolean,
+): number {
+  if (!hasNearbyAccess) return CLOSE_MATCHES_THRESHOLD_MILES
+  switch (tier) {
+    case 'plus':
+      return PLUS_MIN_RADIUS_MILES
+    case 'premium':
+    case 'ultra':
+      return 0
+    default:
+      return CLOSE_MATCHES_THRESHOLD_MILES
+  }
+}
 
 /** @deprecated Use CLOSE_MATCHES_THRESHOLD_MILES */
 export const FREE_NEARBY_RADIUS_MILES = CLOSE_MATCHES_THRESHOLD_MILES
@@ -38,11 +69,14 @@ export const PRODUCT_TO_PACK_ID = Object.fromEntries(
   Object.entries(ARCHETYPE_PACK_PRODUCT_IDS).map(([packId, productId]) => [productId, packId]),
 ) as Record<string, string>
 
-/** Auto-renewable membership subscriptions — single App Store subscription group */
+/** Auto-renewable membership subscriptions — App Store "Yearly" group + legacy SKUs */
 export const SUBSCRIPTION_PRODUCT_IDS: Record<
   string,
   { tier: 'plus' | 'premium' | 'ultra'; billing: 'monthly' | 'yearly' }
 > = {
+  Plus: { tier: 'plus', billing: 'yearly' },
+  Premium: { tier: 'premium', billing: 'yearly' },
+  Ultra: { tier: 'ultra', billing: 'yearly' },
   RidgitsPlusMonthly999: { tier: 'plus', billing: 'monthly' },
   RidgitsPlusYearly6000: { tier: 'plus', billing: 'yearly' },
   RidgitsPremiumMonthly1499: { tier: 'premium', billing: 'monthly' },
@@ -63,9 +97,20 @@ export const TIER_RANK: Record<string, number> = {
 
 export const NEARBY_PRODUCT_IDS = new Set([NEARBY_YEARLY_PRODUCT_ID])
 
+/** Consumable poke packs — credits added to `users.pokeCreditBalance`. */
+export const POKE_PACK_PRODUCT_IDS: Record<string, number> = {
+  /** 10 pokes — $4.99 in App Store Connect (displayed as $5) */
+  RidgitsPokes10Pack: 10,
+  RidgitsPokes25Pack: 25,
+  RidgitsPokes60Pack: 60,
+}
+
+export const POKE_PACK_PRODUCT_ID_SET = new Set(Object.keys(POKE_PACK_PRODUCT_IDS))
+
 export const SUPPORTED_IAP_PRODUCT_IDS = new Set([
   NEARBY_YEARLY_PRODUCT_ID,
   ARCHETYPE_BUNDLE_PRODUCT_ID,
   ...Object.values(ARCHETYPE_PACK_PRODUCT_IDS),
   ...MEMBERSHIP_PRODUCT_IDS,
+  ...POKE_PACK_PRODUCT_ID_SET,
 ])

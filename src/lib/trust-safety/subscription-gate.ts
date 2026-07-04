@@ -2,9 +2,8 @@ import { ApiError } from '@/lib/api-errors'
 import { getNearbyAccess } from '@/lib/ridgits-subscription'
 
 /**
- * Pokes and messaging require an active paid subscription (Ridgits+, Premium, or Ultra).
- * Free users can still browse/match — this only gates the two actions explicitly called
- * out by product: sending a poke and starting/sending a message.
+ * Messaging requires an active paid subscription (Ridgits+, Premium, or Ultra).
+ * Pokes use consumable poke credits (IAP), not subscription.
  */
 export async function requireActiveSubscription(uid: string, email?: string | null): Promise<void> {
   const access = await getNearbyAccess(uid, email)

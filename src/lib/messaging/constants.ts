@@ -1,0 +1,3 @@
+export const MAX_MESSAGE_LENGTH = 2000
+export const DEFAULT_MAX_MESSAGES = 16
+export const DEFAULT_SUSPENSION_MINUTES = 3
