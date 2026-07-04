@@ -11,9 +11,10 @@ import {
 } from '@/lib/matching/compatibility'
 import { normalizeQuizProgress, syncQuizProgressForMatching } from '@/lib/matching/quiz-normalize'
 import { effectiveSubscriptionTier } from '@/lib/subscription-badge'
+import { distanceMilesBetweenUsers } from '@/lib/matching/nearby'
 
 export const NATIONWIDE_CACHE_TTL_MS = 24 * 60 * 60 * 1000
-export const NATIONWIDE_CACHE_VERSION = 12
+export const NATIONWIDE_CACHE_VERSION = 13
 
 function cachedMatchesNeedRecompute(matches: Record<string, unknown>[]): boolean {
   if (matches.length === 0) return false
@@ -104,6 +105,11 @@ export async function computeTopNationwideMatchesInternal(uid: string) {
 
   const userQuiz = await syncQuizProgressForMatching(uid, userQuizSnap.data() ?? {})
   const userProfile = userProfileSnap.exists ? (userProfileSnap.data() ?? {}) : {}
+  const [userPublicSnap] = await Promise.all([
+    getDb().collection('publicProfiles').doc(uid).get(),
+  ])
+  const userPublic = userPublicSnap.exists ? (userPublicSnap.data() ?? {}) : {}
+  const viewerProfile = { ...userProfile, ...userPublic }
 
   const myGender = demoAnswer(userQuiz, 'demo_000', 0)
   const myLookingFor = demoAnswer(userQuiz, 'demo_001', 1)
@@ -167,6 +173,9 @@ export async function computeTopNationwideMatchesInternal(uid: string) {
       if (otherAge < ageRangeMin! || otherAge > ageRangeMax!) continue
     }
 
+    const otherProfile = { ...otherUserProfile, ...p }
+    const distance = await distanceMilesBetweenUsers(uid, viewerProfile, candidate.userId, otherProfile)
+
     results.push({
       userId: candidate.userId,
       name,
@@ -183,7 +192,8 @@ export async function computeTopNationwideMatchesInternal(uid: string) {
       compatibility: candidate.compat,
       archetype: candidate.archetype ?? null,
       subscriptionStatus: p.subscriptionStatus ?? otherUserProfile.subscriptionStatus ?? null,
-      subscriptionTier: effectiveSubscriptionTier({ ...otherUserProfile, ...p }),
+      subscriptionTier: effectiveSubscriptionTier(otherProfile),
+      distance,
     })
   }
 

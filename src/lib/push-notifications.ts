@@ -122,6 +122,7 @@ function apnsCategoryForType(type: EngagementPushPayload['type']): string {
       return 'RIDGITS_MESSAGE'
     case 'message_request':
     case 'message_request_reminder':
+    case 'message_request_declined':
       return 'RIDGITS_MESSAGE_REQUEST'
     case 'conversation_expiring':
       return 'RIDGITS_CONVERSATION_EXPIRING'

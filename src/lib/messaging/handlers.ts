@@ -1,4 +1,4 @@
-import { FieldValue, Timestamp } from 'firebase-admin/firestore'
+import { FieldValue, Timestamp, type DocumentReference } from 'firebase-admin/firestore'
 import { ApiError } from '@/lib/api-errors'
 import { effectiveSubscriptionTier } from '@/lib/subscription-badge'
 import { sendEngagementPush } from '@/lib/push-notifications'
@@ -281,8 +281,16 @@ export async function startConversation(senderId: string, toUserId: string, mess
         if (convo.status === 'active') {
           throw new ApiError('Conversation already exists. Send your message in the existing thread.', 412)
         }
+        if (convo.status === 'declined') {
+          const messagesSnap = await tx.get(conversationRef.collection('messages'))
+          messagesSnap.forEach((doc) => tx.delete(doc.ref))
+          tx.delete(conversationRef)
+        } else {
+          throw new ApiError('Conversation already exists.', 412)
+        }
+      } else {
+        throw new ApiError('Conversation already exists.', 412)
       }
-      throw new ApiError('Conversation already exists.', 412)
     }
 
     tx.set(conversationRef, {
@@ -541,6 +549,111 @@ export async function sendMessage(senderId: string, conversationId: string, mess
 }
 
 export { flagConversationForReview as flagConversation }
+
+async function deleteConversationAndMessages(conversationRef: DocumentReference) {
+  const db = getDb()
+  const messagesSnap = await conversationRef.collection('messages').get()
+  const batch = db.batch()
+  messagesSnap.docs.forEach((doc) => batch.delete(doc.ref))
+  batch.delete(conversationRef)
+  await batch.commit()
+}
+
+export async function declineConversation(userId: string, conversationId: string) {
+  const userSnap = await ensureUserExists(userId)
+  if (!userSnap) throw new ApiError('User not found.', 404)
+
+  const db = getDb()
+  const conversationRef = db.collection('conversations').doc(conversationId)
+  const now = FieldValue.serverTimestamp()
+
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(conversationRef)
+    if (!snap.exists) throw new ApiError('Conversation not found.', 404)
+    const convo = snap.data() ?? {}
+
+    if (!Array.isArray(convo.participantIds) || !convo.participantIds.includes(userId)) {
+      throw new ApiError('You are not part of this conversation.', 403)
+    }
+    if (convo.status === 'blocked') throw new ApiError('This conversation is blocked.', 403)
+    if (convo.status === 'active') throw new ApiError('Conversation is already active.', 412)
+    if (convo.status === 'declined') throw new ApiError('Conversation was already declined.', 412)
+
+    const initiatorId = String(convo.initiatorId ?? '')
+    if (initiatorId === userId) {
+      throw new ApiError('You cannot decline your own message request.', 400)
+    }
+    if (convo.status !== 'pending') {
+      throw new ApiError('Conversation is not pending approval.', 412)
+    }
+
+    const deletedBy = Array.isArray(convo.deletedBy) ? convo.deletedBy : []
+    if (deletedBy.includes(userId)) {
+      return
+    }
+
+    tx.update(conversationRef, {
+      status: 'declined',
+      declinedBy: userId,
+      declinedAt: now,
+      deletedBy: FieldValue.arrayUnion(userId),
+      pendingApprovalsFor: [],
+      updatedAt: now,
+      [`participants.${userId}.declinedAt`]: now,
+    })
+  })
+
+  const snap = await conversationRef.get()
+  const convo = snap.data() ?? {}
+  const initiatorId = String(convo.initiatorId ?? '')
+  const declinerName = String(convo.participants?.[userId]?.displayName ?? 'Your match')
+  if (initiatorId && initiatorId !== userId) {
+    await sendEngagementPush({
+      userId: initiatorId,
+      category: 'messageRequests',
+      type: 'message_request_declined',
+      title: `${declinerName} declined your message`,
+      body: 'You can send a new request later if you like.',
+      collapseKey: `declined-${conversationId}`,
+      data: {
+        route: 'messages',
+        conversationId,
+      },
+    })
+  }
+
+  return { conversationId, status: 'declined' }
+}
+
+export async function withdrawConversation(userId: string, conversationId: string) {
+  const userSnap = await ensureUserExists(userId)
+  if (!userSnap) throw new ApiError('User not found.', 404)
+
+  const db = getDb()
+  const conversationRef = db.collection('conversations').doc(conversationId)
+
+  const snap = await conversationRef.get()
+  if (!snap.exists) throw new ApiError('Conversation not found.', 404)
+  const convo = snap.data() ?? {}
+
+  if (!Array.isArray(convo.participantIds) || !convo.participantIds.includes(userId)) {
+    throw new ApiError('You are not part of this conversation.', 403)
+  }
+
+  const initiatorId = String(convo.initiatorId ?? '')
+  if (initiatorId !== userId) {
+    throw new ApiError('Only the sender can withdraw a pending message request.', 403)
+  }
+
+  const status = String(convo.status ?? '')
+  if (status !== 'pending' && status !== 'declined') {
+    throw new ApiError('Only pending message requests can be withdrawn.', 412)
+  }
+
+  await deleteConversationAndMessages(conversationRef)
+
+  return { conversationId, status: 'withdrawn' }
+}
 
 export async function markConversationRead(userId: string, conversationId: string) {
   const userSnap = await ensureUserExists(userId)

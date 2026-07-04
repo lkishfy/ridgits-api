@@ -67,6 +67,18 @@ async function resolveCoords(
   return coords
 }
 
+export async function distanceMilesBetweenUsers(
+  userAId: string,
+  userAProfile: Record<string, unknown>,
+  userBId: string,
+  userBProfile: Record<string, unknown>,
+): Promise<number | null> {
+  const coordsA = await resolveCoords(userAId, userAProfile, 'users')
+  const coordsB = await resolveCoords(userBId, userBProfile, 'publicProfiles')
+  if (!coordsA || !coordsB) return null
+  return Math.round(haversineMiles(coordsA.lat, coordsA.lng, coordsB.lat, coordsB.lng))
+}
+
 export async function findNearbyMatches(
   uid: string,
   maxDistance = 50,
@@ -165,14 +177,7 @@ export async function findNearbyMatches(
     const otherCoords = await resolveCoords(doc.id, { ...otherUser, ...p }, 'publicProfiles')
     if (!otherCoords) continue
 
-    const isUserInNY = String(mergedProfile.location ?? '').toLowerCase().includes('new york')
-    const isOtherInNY = location.toLowerCase().includes('new york')
-    let distance: number
-    if (isUserInNY && isOtherInNY) {
-      distance = 0
-    } else {
-      distance = haversineMiles(myCoords.lat, myCoords.lng, otherCoords.lat, otherCoords.lng)
-    }
+    const distance = haversineMiles(myCoords.lat, myCoords.lng, otherCoords.lat, otherCoords.lng)
 
     const isCloseMatch =
       distance > 0 && distance < CLOSE_MATCHES_THRESHOLD_MILES

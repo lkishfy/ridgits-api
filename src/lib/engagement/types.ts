@@ -15,6 +15,7 @@ export type EngagementPushType =
   | 'message'
   | 'message_request'
   | 'message_request_reminder'
+  | 'message_request_declined'
   | 'conversation_expiring'
   | 'conversation_approved'
   | 'nearby_match'

@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
         floor > 0
           ? matches.filter((match) => {
               const miles = readDistanceMiles(match as Record<string, unknown>)
-              return miles === 0 || miles >= floor
+              return miles >= floor
             })
           : matches
       return NextResponse.json({ matches: filtered })
@@ -82,7 +82,7 @@ export async function POST(request: NextRequest) {
     )
     const matches = allMatches.filter((match) => {
       const miles = readDistanceMiles(match as Record<string, unknown>)
-      return miles === 0 || miles >= CLOSE_MATCHES_THRESHOLD_MILES
+      return miles >= CLOSE_MATCHES_THRESHOLD_MILES
     })
 
     return NextResponse.json({ matches, closeMatchCount })

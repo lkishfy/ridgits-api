@@ -4,15 +4,18 @@ export const RIDGITS_BUNDLE_ID = process.env.APP_STORE_BUNDLE_ID ?? 'com.ridgits
 export const NEARBY_YEARLY_PRODUCT_ID = 'RidgitsNearbyYear2999'
 
 /** Matches closer than this are hidden for free users. */
-export const CLOSE_MATCHES_THRESHOLD_MILES = 25
+export const CLOSE_MATCHES_THRESHOLD_MILES = 30
 
 /** Ridgits+ minimum search radius (mi). */
 export const PLUS_MIN_RADIUS_MILES = 25
 
-/** Unsubscribed users can search between 25 and 150 miles. */
-export const UNSUBSCRIBED_MIN_RADIUS_MILES = 25
+/** Unsubscribed users can search between 30 and 150 miles. */
+export const UNSUBSCRIBED_MIN_RADIUS_MILES = 30
 
 export const MAX_NEARBY_RADIUS_MILES = 150
+
+/** Quick-select radius chips (mi). Tier rules gate which values are selectable. */
+export const RADIUS_PRESET_MILES = [0, 10, 25, 50, 150] as const
 
 export function nearbySearchMinRadiusMiles(tier: string | null | undefined): number {
   switch (tier) {
@@ -24,6 +27,22 @@ export function nearbySearchMinRadiusMiles(tier: string | null | undefined): num
     default:
       return UNSUBSCRIBED_MIN_RADIUS_MILES
   }
+}
+
+export function nearbySearchMinRadiusMilesForAccess(
+  tier: string | null | undefined,
+  hasNearbyAccess: boolean,
+): number {
+  if (!hasNearbyAccess) return UNSUBSCRIBED_MIN_RADIUS_MILES
+  return nearbySearchMinRadiusMiles(tier)
+}
+
+export function isRadiusLockedForAccess(
+  radiusMiles: number,
+  tier: string | null | undefined,
+  hasNearbyAccess: boolean,
+): boolean {
+  return radiusMiles < nearbySearchMinRadiusMilesForAccess(tier, hasNearbyAccess)
 }
 
 export function nearbyCloseMatchFloorMiles(
