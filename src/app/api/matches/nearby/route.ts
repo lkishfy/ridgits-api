@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
     const requested =
       typeof body.maxDistance === 'number'
         ? body.maxDistance
-        : UNSUBSCRIBED_MIN_RADIUS_MILES
+        : 50
 
     if (access.hasNearbyAccess) {
       const tier = access.subscriptionTier ?? 'free'

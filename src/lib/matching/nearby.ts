@@ -20,6 +20,8 @@ export type NearbyMatchScanOptions = {
   closeCountOnly?: boolean
   /** When true, track closeMatchCount while building the full match list in one pass. */
   includeCloseCount?: boolean
+  /** When true with includeCloseCount, close matches are still returned in the match list. */
+  includeCloseMatchesInResults?: boolean
 }
 
 export type NearbyMatchScanResult = {
@@ -85,7 +87,8 @@ export async function findNearbyMatches(
   minCompatibility = 5,
   options: NearbyMatchScanOptions = {},
 ): Promise<NearbyMatchScanResult> {
-  const { closeCountOnly = false, includeCloseCount = false } = options
+  const { closeCountOnly = false, includeCloseCount = false, includeCloseMatchesInResults = false } =
+    options
   const db = getDb()
   const [userQuizSnap, userProfileSnap, userPublicSnap] = await Promise.all([
     db.collection('quizProgress').doc(uid).get(),
@@ -189,7 +192,7 @@ export async function findNearbyMatches(
       continue
     }
 
-    if (isCloseMatch && includeCloseCount) {
+    if (isCloseMatch && includeCloseCount && !includeCloseMatchesInResults) {
       continue
     }
 

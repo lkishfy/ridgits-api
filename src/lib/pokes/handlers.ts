@@ -155,3 +155,14 @@ export async function unpoke(senderId: string, pokeId: string) {
   await ref.delete()
   return { pokeId, removed: true }
 }
+
+export async function dismissReceivedPoke(recipientId: string, pokeId: string) {
+  const db = getDb()
+  const ref = db.collection('pokes').doc(pokeId)
+  const snap = await ref.get()
+  if (!snap.exists) throw new ApiError('Poke not found.', 404)
+  const data = snap.data() ?? {}
+  if (data.toUserId !== recipientId) throw new ApiError('Not allowed.', 403)
+  await ref.delete()
+  return { pokeId, removed: true }
+}

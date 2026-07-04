@@ -9,8 +9,11 @@ export const CLOSE_MATCHES_THRESHOLD_MILES = 30
 /** Ridgits+ minimum search radius (mi). */
 export const PLUS_MIN_RADIUS_MILES = 25
 
-/** Unsubscribed users can search between 30 and 150 miles. */
-export const UNSUBSCRIBED_MIN_RADIUS_MILES = 30
+/** Ridgits Premium unlocks these closer radius presets (mi). */
+export const PREMIUM_RADIUS_PRESET_MILES = [0, 10] as const
+
+/** Unsubscribed users search from 50 to 150 miles (closer radii require Ridgits+). */
+export const UNSUBSCRIBED_MIN_RADIUS_MILES = 50
 
 export const MAX_NEARBY_RADIUS_MILES = 150
 
