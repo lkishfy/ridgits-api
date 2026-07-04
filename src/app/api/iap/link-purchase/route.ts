@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { apiErrorResponse } from '@/lib/api-errors'
 import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
 import { linkPurchase } from '@/lib/ridgits-iap'
 
@@ -27,8 +28,8 @@ export async function POST(request: NextRequest) {
     })
     return NextResponse.json(result)
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to link purchase'
+    const { message, status, code } = apiErrorResponse(error)
     console.error('[iap/link-purchase]', auth.uid, message)
-    return NextResponse.json({ error: message }, { status: 400 })
+    return NextResponse.json({ error: message, code }, { status: status >= 400 && status < 600 ? status : 400 })
   }
 }

@@ -1,15 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
-import { maybeGrantRidgitsReferralBonusForReferredUser } from '@/lib/ridgits-referrals'
 import { apiErrorResponse } from '@/lib/api-errors'
+import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
+import { matchProfilePhotoToIdentity } from '@/lib/trust-safety/profile-identity-match'
 
-/** Called after a referred user completes onboarding quiz to grant both referral bonuses. */
 export async function POST(request: NextRequest) {
   const auth = await requireRidgitsAuth(request)
   if (isNextResponse(auth)) return auth
 
   try {
-    const result = await maybeGrantRidgitsReferralBonusForReferredUser(auth.uid)
+    const result = await matchProfilePhotoToIdentity(auth.uid)
     return NextResponse.json(result)
   } catch (error) {
     const { message, status, code } = apiErrorResponse(error)

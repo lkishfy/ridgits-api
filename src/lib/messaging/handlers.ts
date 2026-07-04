@@ -18,6 +18,7 @@ import { requireAccountCooldownElapsed } from '@/lib/trust-safety/account-age'
 import { requireUserBirthYearOnFile } from '@/lib/trust-safety/age'
 import { requireActiveSubscription } from '@/lib/trust-safety/subscription-gate'
 import { validateProfilePhotoUrl } from '@/lib/trust-safety/profile-photo'
+import { requireProfilePhotoIdentityMatch } from '@/lib/trust-safety/stripe-identity'
 import {
   getMonthlyMessageQuota,
 } from '@/lib/messaging/monthly-quota'
@@ -107,6 +108,8 @@ async function ensureMessagingAllowed(uid: string, actor: MessagingActor) {
   if (!photoCheck.ok) {
     throw new ApiError(photoCheck.reason ?? 'A valid profile photo is required to message.', 412, 'INVALID_PROFILE_PHOTO')
   }
+
+  await requireProfilePhotoIdentityMatch(uid)
 
   await requireActiveSubscription(uid, actor.email)
 

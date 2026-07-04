@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { FieldValue } from 'firebase-admin/firestore'
+import { ApiError } from '@/lib/api-errors'
 import { getDb } from '@/lib/firebase-admin'
 
 /**
@@ -63,6 +64,16 @@ export async function lookupPhoneIntelligence(e164Phone: string): Promise<PhoneL
   }
 }
 
+export function normalizeE164Phone(raw: string): string {
+  const trimmed = raw.trim()
+  const digits = trimmed.replace(/[^\d+]/g, '')
+  if (digits.startsWith('+')) return digits
+  const onlyDigits = digits.replace(/\D/g, '')
+  if (onlyDigits.length === 10) return `+1${onlyDigits}`
+  if (onlyDigits.length === 11 && onlyDigits.startsWith('1')) return `+${onlyDigits}`
+  return trimmed.startsWith('+') ? trimmed : `+${onlyDigits}`
+}
+
 /** Throws-free check — returns the uid already holding this phone number, if any. */
 export async function findExistingPhoneOwner(e164Phone: string): Promise<string | null> {
   const hash = hashPhoneNumber(e164Phone)
@@ -70,6 +81,17 @@ export async function findExistingPhoneOwner(e164Phone: string): Promise<string 
   if (!snap.exists) return null
   const uid = snap.data()?.uid
   return typeof uid === 'string' ? uid : null
+}
+
+export async function assertPhoneNotAlreadyClaimed(e164Phone: string, uid: string): Promise<void> {
+  const existing = await findExistingPhoneOwner(e164Phone)
+  if (existing && existing !== uid) {
+    throw new ApiError(
+      'This phone number is already linked to another Ridgits account.',
+      409,
+      'PHONE_ALREADY_CLAIMED',
+    )
+  }
 }
 
 /** Claims a phone number for a user, storing only the hash (never the raw number). */

@@ -38,6 +38,7 @@ type ReferralDoc = {
   createdAt: Timestamp
   grantedAt?: Timestamp | null
   grantedPackId?: string | null
+  referredGrantedPackId?: string | null
 }
 
 export interface RidgitsReferralProfile {
@@ -87,7 +88,7 @@ function effectiveReferralStatus(
 }
 
 export function buildReferralShareMessage(code: string): string {
-  return `Join me on Ridgits — use my code ${code} when you sign up. Finish your personality quiz within ${RIDGITS_REFERRAL_PENDING_EXPIRY_DAYS} days and I'll unlock a free special quiz. https://ridgits.com/invite?ref=${encodeURIComponent(code)}`
+  return `Join me on Ridgits — use my code ${code} when you sign up. Finish your personality quiz within ${RIDGITS_REFERRAL_PENDING_EXPIRY_DAYS} days and you'll both unlock a free special quiz. https://ridgits.com/invite?ref=${encodeURIComponent(code)}`
 }
 
 async function ensureReferralCodeForUser(uid: string): Promise<string> {
@@ -181,9 +182,16 @@ async function getReferredUserRedemption(referredUid: string): Promise<{
   const doc = snap.docs[0]!
   const data = doc.data()
   const createdAt = data.createdAt ?? Timestamp.now()
+  const rawStatus = String(data.status ?? 'pending')
+  const hasReferredBonus =
+    typeof data.referredGrantedPackId === 'string' && data.referredGrantedPackId.trim().length > 0
+  const status =
+    rawStatus === 'granted' || hasReferredBonus
+      ? 'granted'
+      : effectiveReferralStatus(rawStatus, createdAt)
   return {
     referralCode: String(data.referralCode ?? ''),
-    status: effectiveReferralStatus(String(data.status ?? 'pending'), createdAt),
+    status,
   }
 }
 
@@ -255,57 +263,140 @@ async function referredUserMeetsQualification(referredUid: string): Promise<bool
   return data.onboardingCompleted === true || data.quizCompletedAt != null
 }
 
-async function grantReferrerBonusForReferral(referral: ReferralDoc): Promise<string | null> {
+async function grantReferralBonuses(referral: ReferralDoc): Promise<{
+  referrerPackId: string | null
+  referredPackId: string | null
+}> {
   const db = getDb()
-
-  const grantedCount = await countReferrerGrantedBonuses(referral.referrerUid)
-  if (grantedCount >= RIDGITS_MAX_REFERRALS) {
-    await markReferralExpired(referral.id)
-    return null
-  }
-
-  if (await referrerBonusGrantedRecently(referral.referrerUid)) {
-    return null
-  }
-
-  const referrerRef = db.collection('users').doc(referral.referrerUid)
-  const referrerSnap = await referrerRef.get()
-  const packId = pickReferralBonusPack(referrerSnap.data())
-  if (!packId) {
-    await markReferralExpired(referral.id)
-    return null
-  }
-
   const referralRef = db.collection('referrals').doc(referral.id)
-  const granted = await db.runTransaction(async (tx) => {
+  const referrerRef = db.collection('users').doc(referral.referrerUid)
+  const referredRef = db.collection('users').doc(referral.referredUid)
+
+  const existingSnap = await referralRef.get()
+  if (!existingSnap.exists) {
+    return { referrerPackId: null, referredPackId: null }
+  }
+
+  const existing = existingSnap.data() ?? {}
+  const existingStatus = String(existing.status ?? 'pending')
+  const existingReferrerPackId =
+    typeof existing.grantedPackId === 'string' ? existing.grantedPackId : null
+  const existingReferredPackId =
+    typeof existing.referredGrantedPackId === 'string' ? existing.referredGrantedPackId : null
+
+  if (existingStatus === 'granted') {
+    return {
+      referrerPackId: existingReferrerPackId,
+      referredPackId: existingReferredPackId,
+    }
+  }
+  if (existingStatus === 'expired') {
+    return { referrerPackId: null, referredPackId: null }
+  }
+
+  const referredSnap = await referredRef.get()
+  const referredPackId =
+    existingReferredPackId ?? pickReferralBonusPack(referredSnap.data())
+
+  let referrerPackId: string | null = existingReferrerPackId
+  let referrerBlockedByCooldown = false
+  if (!referrerPackId) {
+    const grantedCount = await countReferrerGrantedBonuses(referral.referrerUid)
+    if (grantedCount >= RIDGITS_MAX_REFERRALS) {
+      referrerPackId = null
+    } else if (await referrerBonusGrantedRecently(referral.referrerUid)) {
+      referrerBlockedByCooldown = true
+      referrerPackId = null
+    } else {
+      const referrerSnap = await referrerRef.get()
+      referrerPackId = pickReferralBonusPack(referrerSnap.data())
+    }
+  }
+
+  if (!referredPackId && !referrerPackId && !existingReferredPackId && !existingReferrerPackId) {
+    if (!referrerBlockedByCooldown) {
+      await markReferralExpired(referral.id)
+    }
+    return { referrerPackId: null, referredPackId: null }
+  }
+
+  const nextReferrerPackId = referrerPackId
+  const nextReferredPackId = referredPackId
+  const shouldMarkGranted =
+    Boolean(nextReferredPackId || existingReferredPackId) &&
+    Boolean(nextReferrerPackId || existingReferrerPackId || !referrerBlockedByCooldown)
+
+  const result = await db.runTransaction(async (tx) => {
     const snap = await tx.get(referralRef)
-    if (!snap.exists || snap.data()?.status !== 'pending') return false
+    if (!snap.exists) {
+      return { referrerPackId: null as string | null, referredPackId: null as string | null }
+    }
 
-    tx.update(referralRef, {
-      status: 'granted',
-      grantedAt: FieldValue.serverTimestamp(),
-      grantedPackId: packId,
-      bonusGranted: RIDGITS_REFERRAL_BONUS_PACKS,
-    })
+    const data = snap.data() ?? {}
+    const status = String(data.status ?? 'pending')
+    if (status === 'granted') {
+      return {
+        referrerPackId:
+          typeof data.grantedPackId === 'string' ? data.grantedPackId : null,
+        referredPackId:
+          typeof data.referredGrantedPackId === 'string' ? data.referredGrantedPackId : null,
+      }
+    }
+    if (status === 'expired') {
+      return { referrerPackId: null, referredPackId: null }
+    }
 
-    tx.set(
-      referrerRef,
-      {
-        unlockedPacks: FieldValue.arrayUnion(packId),
-        referralsCompleted: FieldValue.increment(1),
-      },
-      { merge: true },
-    )
+    const updates: Record<string, unknown> = {}
 
-    return true
+    if (nextReferrerPackId) {
+      updates.grantedPackId = nextReferrerPackId
+      updates.bonusGranted = RIDGITS_REFERRAL_BONUS_PACKS
+      tx.set(
+        referrerRef,
+        {
+          unlockedPacks: FieldValue.arrayUnion(nextReferrerPackId),
+          referralsCompleted: FieldValue.increment(1),
+        },
+        { merge: true },
+      )
+    }
+
+    if (nextReferredPackId && !data.referredGrantedPackId) {
+      updates.referredGrantedPackId = nextReferredPackId
+      tx.set(
+        referredRef,
+        {
+          unlockedPacks: FieldValue.arrayUnion(nextReferredPackId),
+        },
+        { merge: true },
+      )
+    }
+
+    if (shouldMarkGranted) {
+      updates.status = 'granted'
+      updates.grantedAt = FieldValue.serverTimestamp()
+    }
+
+    if (Object.keys(updates).length > 0) {
+      tx.update(referralRef, updates)
+    }
+
+    return {
+      referrerPackId: nextReferrerPackId ?? existingReferrerPackId,
+      referredPackId: nextReferredPackId ?? existingReferredPackId,
+    }
   })
 
-  return granted ? packId : null
+  return result
 }
 
 export async function maybeGrantRidgitsReferralBonusForReferredUser(
   referredUid: string,
-): Promise<{ granted: boolean; grantedPackId: string | null }> {
+): Promise<{
+  granted: boolean
+  grantedPackId: string | null
+  referrerGrantedPackId: string | null
+}> {
   const db = getDb()
   const snap = await db
     .collection('referrals')
@@ -313,23 +404,37 @@ export async function maybeGrantRidgitsReferralBonusForReferredUser(
     .limit(1)
     .get()
 
-  if (snap.empty) return { granted: false, grantedPackId: null }
+  if (snap.empty) {
+    return { granted: false, grantedPackId: null, referrerGrantedPackId: null }
+  }
 
   const doc = snap.docs[0]!
   const data = doc.data()
   const status = String(data.status ?? '')
-  if (status === 'granted' || status === 'expired') {
-    return { granted: false, grantedPackId: null }
+  const existingReferredPackId =
+    typeof data.referredGrantedPackId === 'string' ? data.referredGrantedPackId : null
+  const existingReferrerPackId =
+    typeof data.grantedPackId === 'string' ? data.grantedPackId : null
+
+  if (status === 'granted') {
+    return {
+      granted: existingReferredPackId != null,
+      grantedPackId: existingReferredPackId,
+      referrerGrantedPackId: existingReferrerPackId,
+    }
+  }
+  if (status === 'expired') {
+    return { granted: false, grantedPackId: null, referrerGrantedPackId: null }
   }
 
   const createdAt = data.createdAt ?? Timestamp.now()
   if (referralPendingExpired(createdAt)) {
     await markReferralExpired(doc.id)
-    return { granted: false, grantedPackId: null }
+    return { granted: false, grantedPackId: null, referrerGrantedPackId: null }
   }
 
   if (!(await referredUserMeetsQualification(referredUid))) {
-    return { granted: false, grantedPackId: null }
+    return { granted: false, grantedPackId: null, referrerGrantedPackId: null }
   }
 
   const referral: ReferralDoc = {
@@ -339,10 +444,16 @@ export async function maybeGrantRidgitsReferralBonusForReferredUser(
     referralCode: String(data.referralCode),
     status: 'pending',
     createdAt,
+    referredGrantedPackId: existingReferredPackId,
+    grantedPackId: existingReferrerPackId,
   }
 
-  const grantedPackId = await grantReferrerBonusForReferral(referral)
-  return { granted: grantedPackId != null, grantedPackId }
+  const { referrerPackId, referredPackId } = await grantReferralBonuses(referral)
+  return {
+    granted: referredPackId != null,
+    grantedPackId: referredPackId,
+    referrerGrantedPackId: referrerPackId,
+  }
 }
 
 export async function getRidgitsReferralProfile(input: {
@@ -418,11 +529,13 @@ export async function redeemRidgitsReferralCode(input: {
     const existingCode = normalizeReferralCode(String(data.referralCode ?? ''))
 
     if (status === 'granted') {
+      const referredGrantedPackId =
+        typeof data.referredGrantedPackId === 'string' ? data.referredGrantedPackId : null
       return {
         redeemed: false,
         alreadyRedeemed: true,
         referrerUid: typeof data.referrerUid === 'string' ? data.referrerUid : undefined,
-        grantedPackId: typeof data.grantedPackId === 'string' ? data.grantedPackId : null,
+        grantedPackId: referredGrantedPackId,
         bonusPending: false,
       }
     }
@@ -461,6 +574,7 @@ export async function redeemRidgitsReferralCode(input: {
       status: 'pending',
       grantedAt: null,
       grantedPackId: null,
+      referredGrantedPackId: null,
       bonusGranted: 0,
       createdAt: FieldValue.serverTimestamp(),
     })

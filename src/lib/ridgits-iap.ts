@@ -1,5 +1,6 @@
 import { FieldValue } from 'firebase-admin/firestore'
 import { getDb } from '@/lib/firebase-admin'
+import { requireIdentityVerified } from '@/lib/trust-safety/stripe-identity'
 import {
   decodeAppleJwsPayload,
   resolveExpiresIso,
@@ -88,6 +89,10 @@ export async function linkPurchase(input: LinkPurchaseInput): Promise<LinkPurcha
 
   const db = getDb()
   const userRef = db.collection('users').doc(input.uid)
+
+  if (membership || isNearbyProduct) {
+    await requireIdentityVerified(input.uid)
+  }
 
   return db.runTransaction(async (transaction) => {
     const userSnap = await transaction.get(userRef)
