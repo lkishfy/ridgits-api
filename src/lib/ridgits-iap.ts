@@ -21,6 +21,7 @@ import {
 } from '@/lib/ridgits-products'
 import { hasActiveSubscriptionAccess } from '@/lib/ridgits-subscription'
 import { purgeLockedPackQuizData } from '@/lib/ridgits-pack-access'
+import { assertProfileCompleteForPurchase } from '@/lib/profile-complete'
 import { revokeSubscriptionBadge, syncSubscriptionBadge } from '@/lib/subscription-badge'
 
 export interface LinkPurchaseInput {
@@ -28,6 +29,8 @@ export interface LinkPurchaseInput {
   transactionId?: string
   productId?: string
   signedTransactionInfo?: string
+  /** When true, skip profile completion check (restore / entitlement sync). */
+  restoring?: boolean
 }
 
 export interface LinkPurchaseResult {
@@ -80,6 +83,10 @@ export async function linkPurchase(input: LinkPurchaseInput): Promise<LinkPurcha
 
   if (!SUPPORTED_IAP_PRODUCT_IDS.has(productId)) {
     throw new Error('Unsupported product')
+  }
+
+  if (!input.restoring) {
+    await assertProfileCompleteForPurchase(input.uid)
   }
 
   const packId = PRODUCT_TO_PACK_ID[productId]

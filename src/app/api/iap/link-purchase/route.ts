@@ -11,6 +11,7 @@ export async function POST(request: NextRequest) {
     transactionId?: string
     productId?: string
     signedTransactionInfo?: string
+    restoring?: boolean
   } = {}
 
   try {
@@ -25,6 +26,7 @@ export async function POST(request: NextRequest) {
       transactionId: body.transactionId,
       productId: body.productId,
       signedTransactionInfo: body.signedTransactionInfo,
+      restoring: body.restoring === true,
     })
     return NextResponse.json(result)
   } catch (error) {
