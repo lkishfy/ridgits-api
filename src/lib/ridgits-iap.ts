@@ -218,6 +218,67 @@ export async function linkPurchase(input: LinkPurchaseInput): Promise<LinkPurcha
   return result
 }
 
+/** Applies a pending App Store renewal upgrade (autoRenewPreference) before the new period starts. */
+export async function syncRenewalPreference(input: {
+  uid: string
+  renewalProductId: string
+  signedRenewalInfo?: string
+}): Promise<{ synced: boolean }> {
+  const productId = input.renewalProductId.trim()
+  const membership = SUBSCRIPTION_PRODUCT_IDS[productId]
+  if (!membership) {
+    throw new Error('Unsupported renewal product')
+  }
+
+  const signed = input.signedRenewalInfo?.trim() ?? ''
+  if (signed) {
+    try {
+      const payload = decodeAppleJwsPayload(signed) as Record<string, unknown>
+      const renewId = String(
+        payload.autoRenewProductId ?? payload.productId ?? '',
+      ).trim()
+      if (renewId && renewId !== productId) {
+        throw new Error('Renewal product mismatch')
+      }
+    } catch (error) {
+      console.warn('[iap/sync-renewal] renewal JWS check skipped', input.uid, error)
+    }
+  }
+
+  const db = getDb()
+  const userRef = db.collection('users').doc(input.uid)
+  const snap = await userRef.get()
+  if (!snap.exists || !hasActiveSubscriptionAccess(snap.data())) {
+    throw new ApiError('No active subscription to update.', 412, 'SUBSCRIPTION_REQUIRED')
+  }
+
+  const storedTier = String(snap.get('subscriptionTier') ?? 'free')
+  const storedRank = TIER_RANK[storedTier] ?? 0
+  const renewalRank = TIER_RANK[membership.tier] ?? 0
+  if (renewalRank <= storedRank) {
+    return { synced: false }
+  }
+
+  await userRef.set(
+    {
+      subscriptionProductId: productId,
+      subscriptionTier: membership.tier,
+      subscriptionBillingPeriod: membership.billing,
+      subscriptionSource: 'app_store',
+      subscriptionStatus: 'active',
+      lastValidatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  )
+  await syncSubscriptionBadge({
+    uid: input.uid,
+    tier: membership.tier,
+    status: 'active',
+  })
+
+  return { synced: true }
+}
+
 function membershipUpdateFields(input: {
   productId: string
   membership: { tier: 'plus' | 'premium' | 'ultra'; billing: 'monthly' | 'yearly' }
