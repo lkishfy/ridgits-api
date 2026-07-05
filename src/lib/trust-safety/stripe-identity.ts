@@ -78,25 +78,54 @@ async function syncIdentityStatusFromStripeIfNeeded(
   uid: string,
   data: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const sessionId = String(data.stripeVerificationSessionId ?? '').trim()
-  if (!sessionId || !isStripeConfigured()) return data
+  if (!isStripeConfigured()) return data
 
   const identityOk = data.identityVerificationStatus === 'verified'
   const phoneOk =
     !identityRequiresPhoneVerification() || data.phoneVerificationStatus === 'verified'
   if (identityOk && phoneOk) return data
 
-  try {
-    const stripe = getStripe()
-    const session = await stripe.identity.verificationSessions.retrieve(sessionId)
+  const stripe = getStripe()
+  let bestData = data
+
+  const applySession = async (session: Stripe.Identity.VerificationSession) => {
     await applyVerificationSessionUpdate(session)
     const refreshed = await getDb().collection('users').doc(uid).get()
-    return refreshed.data() ?? data
-  } catch (error) {
-    console.error('[stripe-identity] sync from Stripe failed', uid, sessionId, error)
+    bestData = refreshed.data() ?? bestData
   }
 
-  return data
+  const isFullyVerified = (userData: Record<string, unknown>) => {
+    const idOk = userData.identityVerificationStatus === 'verified'
+    const phOk =
+      !identityRequiresPhoneVerification() || userData.phoneVerificationStatus === 'verified'
+    return idOk && phOk
+  }
+
+  const sessionId = String(data.stripeVerificationSessionId ?? '').trim()
+  if (sessionId) {
+    try {
+      const session = await stripe.identity.verificationSessions.retrieve(sessionId)
+      await applySession(session)
+      if (isFullyVerified(bestData)) return bestData
+    } catch (error) {
+      console.error('[stripe-identity] sync stored session failed', uid, sessionId, error)
+    }
+  }
+
+  try {
+    const listed = await stripe.identity.verificationSessions.list({
+      client_reference_id: uid,
+      limit: 20,
+    })
+    const verified = listed.data.find((s) => s.status === 'verified')
+    if (verified) {
+      await applySession(verified)
+    }
+  } catch (error) {
+    console.error('[stripe-identity] list verified sessions failed', uid, error)
+  }
+
+  return bestData
 }
 
 export async function getIdentityStatus(uid: string): Promise<IdentityStatusPayload> {
@@ -184,6 +213,15 @@ export async function createIdentityVerificationSession(
     throw new ApiError('Identity verification is not configured.', 503, 'IDENTITY_UNAVAILABLE')
   }
 
+  const currentStatus = await getIdentityStatus(uid)
+  if (currentStatus.identityVerificationStatus === 'verified') {
+    const phoneOk =
+      !identityRequiresPhoneVerification() || currentStatus.phoneVerificationStatus === 'verified'
+    if (phoneOk) {
+      throw new ApiError('Identity verification is already complete.', 400, 'IDENTITY_ALREADY_VERIFIED')
+    }
+  }
+
   const stripe = getStripe()
   const userRef = getDb().collection('users').doc(uid)
   const userSnap = await userRef.get()
@@ -192,10 +230,15 @@ export async function createIdentityVerificationSession(
   if (existingSessionId) {
     try {
       const existing = await stripe.identity.verificationSessions.retrieve(existingSessionId)
+      if (existing.status === 'verified') {
+        await applyVerificationSessionUpdate(existing)
+        throw new ApiError('Identity verification is already complete.', 400, 'IDENTITY_ALREADY_VERIFIED')
+      }
       if (['requires_input', 'processing'].includes(existing.status) && existing.url) {
         return { url: existing.url, sessionId: existing.id }
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiError) throw error
       // Fall through and create a new session.
     }
   }
@@ -218,6 +261,7 @@ export async function createIdentityVerificationSession(
 
   const sessionParams: Stripe.Identity.VerificationSessionCreateParams = {
     metadata: { ridgitsUid: uid },
+    client_reference_id: uid,
     return_url: IDENTITY_RETURN_URL,
     ...(normalizedPhone
       ? {
