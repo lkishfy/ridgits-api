@@ -75,6 +75,34 @@ function timestampToIso(value: unknown): string | null {
 }
 
 /** Pull latest verification state from Stripe when Firestore is stale (e.g. webhook missed). */
+async function findVerifiedSessionForUid(
+  stripe: Stripe,
+  uid: string,
+): Promise<Stripe.Identity.VerificationSession | null> {
+  const byRef = await stripe.identity.verificationSessions.list({
+    client_reference_id: uid,
+    limit: 20,
+  })
+  const fromRef = byRef.data.find((s) => s.status === 'verified')
+  if (fromRef) return fromRef
+
+  let startingAfter: string | undefined
+  for (let page = 0; page < 5; page++) {
+    const list = await stripe.identity.verificationSessions.list({
+      limit: 100,
+      starting_after: startingAfter,
+    })
+    const match = list.data.find(
+      (s) => s.metadata?.ridgitsUid === uid && s.status === 'verified',
+    )
+    if (match) return match
+    if (!list.has_more || list.data.length === 0) break
+    startingAfter = list.data[list.data.length - 1]?.id
+  }
+
+  return null
+}
+
 async function syncIdentityStatusFromStripeIfNeeded(
   uid: string,
   data: Record<string, unknown>,
@@ -89,12 +117,6 @@ async function syncIdentityStatusFromStripeIfNeeded(
   const stripe = getStripe()
   let bestData = data
 
-  const applySession = async (session: Stripe.Identity.VerificationSession) => {
-    await applyVerificationSessionUpdate(session)
-    const refreshed = await getDb().collection('users').doc(uid).get()
-    bestData = refreshed.data() ?? bestData
-  }
-
   const isFullyVerified = (userData: Record<string, unknown>) => {
     const idOk = userData.identityVerificationStatus === 'verified'
     const phOk =
@@ -102,28 +124,34 @@ async function syncIdentityStatusFromStripeIfNeeded(
     return idOk && phOk
   }
 
+  try {
+    const verifiedSession = await findVerifiedSessionForUid(stripe, uid)
+    if (verifiedSession) {
+      await applyVerificationSessionUpdate(verifiedSession)
+      const refreshed = await getDb().collection('users').doc(uid).get()
+      return refreshed.data() ?? bestData
+    }
+  } catch (error) {
+    console.error('[stripe-identity] find verified session failed', uid, error)
+  }
+
   const sessionId = String(data.stripeVerificationSessionId ?? '').trim()
-  if (sessionId) {
+  if (sessionId && data.identityVerificationStatus !== 'verified') {
     try {
       const session = await stripe.identity.verificationSessions.retrieve(sessionId)
-      await applySession(session)
-      if (isFullyVerified(bestData)) return bestData
+      if (session.status === 'verified') {
+        await applyVerificationSessionUpdate(session)
+        const refreshed = await getDb().collection('users').doc(uid).get()
+        bestData = refreshed.data() ?? bestData
+        if (isFullyVerified(bestData)) return bestData
+      } else if (['requires_input', 'processing'].includes(session.status)) {
+        await applyVerificationSessionUpdate(session)
+        const refreshed = await getDb().collection('users').doc(uid).get()
+        bestData = refreshed.data() ?? bestData
+      }
     } catch (error) {
       console.error('[stripe-identity] sync stored session failed', uid, sessionId, error)
     }
-  }
-
-  try {
-    const listed = await stripe.identity.verificationSessions.list({
-      client_reference_id: uid,
-      limit: 20,
-    })
-    const verified = listed.data.find((s) => s.status === 'verified')
-    if (verified) {
-      await applySession(verified)
-    }
-  } catch (error) {
-    console.error('[stripe-identity] list verified sessions failed', uid, error)
   }
 
   return bestData
@@ -318,6 +346,13 @@ export async function applyVerificationSessionUpdate(session: Stripe.Identity.Ve
     return
   }
 
+  const userRef = getDb().collection('users').doc(uid)
+  const existingSnap = await userRef.get()
+  const existingIdentity = String(existingSnap.get('identityVerificationStatus') ?? '')
+  if (existingIdentity === 'verified' && session.status !== 'verified') {
+    return
+  }
+
   const mappedStatus = mapSessionStatus(session.status)
   const update: Record<string, unknown> = {
     stripeVerificationSessionId: session.id,
@@ -351,7 +386,7 @@ export async function applyVerificationSessionUpdate(session: Stripe.Identity.Ve
     }
   }
 
-  await getDb().collection('users').doc(uid).set(update, { merge: true })
+  await userRef.set(update, { merge: true })
 
   if (session.status === 'verified') {
     const phoneOk =
