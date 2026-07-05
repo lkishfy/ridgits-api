@@ -14,10 +14,16 @@ export const IDENTITY_APP_DEEP_LINK = 'ridgits://identity/complete'
 export const IDENTITY_RETURN_URL =
   process.env.STRIPE_IDENTITY_RETURN_URL?.trim() || 'https://ridgits.com/identity/complete'
 
+/** Stripe Identity phone OTP is enabled by default; set RIDGITS_IDENTITY_REQUIRE_PHONE=false to disable. */
 function identityRequiresPhoneVerification(): boolean {
-  const raw = process.env.RIDGITS_IDENTITY_REQUIRE_PHONE?.trim()
-  if (raw === 'false') return false
+  const raw = process.env.RIDGITS_IDENTITY_REQUIRE_PHONE?.trim().toLowerCase()
+  if (raw === 'false' || raw === '0' || raw === 'no') return false
   return true
+}
+
+function getVerificationFlowId(): string | null {
+  const flowId = process.env.STRIPE_IDENTITY_VERIFICATION_FLOW_ID?.trim()
+  return flowId || null
 }
 
 export type IdentityVerificationStatus =
@@ -173,14 +179,24 @@ export async function createIdentityVerificationSession(
   }
 
   const requirePhone = identityRequiresPhoneVerification()
+  const flowId = getVerificationFlowId()
   const normalizedPhone = input?.phone?.trim() ? normalizeE164Phone(input.phone) : null
+
+  if (requirePhone && !flowId) {
+    throw new ApiError(
+      'Phone verification is not configured. Set STRIPE_IDENTITY_VERIFICATION_FLOW_ID to a Stripe Dashboard verification flow with phone OTP enabled.',
+      503,
+      'IDENTITY_PHONE_FLOW_NOT_CONFIGURED',
+    )
+  }
+
   if (normalizedPhone) {
     await assertPhoneNotAlreadyClaimed(normalizedPhone, uid)
   }
 
-  const session = await stripe.identity.verificationSessions.create({
-    type: 'document',
+  const sessionParams: Stripe.Identity.VerificationSessionCreateParams = {
     metadata: { ridgitsUid: uid },
+    return_url: IDENTITY_RETURN_URL,
     ...(normalizedPhone
       ? {
           provided_details: {
@@ -188,21 +204,21 @@ export async function createIdentityVerificationSession(
           },
         }
       : {}),
-    options: {
+  }
+
+  if (flowId) {
+    sessionParams.verification_flow = flowId
+  } else {
+    sessionParams.type = 'document'
+    sessionParams.options = {
       document: {
         require_matching_selfie: true,
         require_live_capture: true,
       },
-      ...(requirePhone
-        ? {
-            phone: {
-              require_verification: true,
-            },
-          }
-        : {}),
-    },
-    return_url: IDENTITY_RETURN_URL,
-  })
+    }
+  }
+
+  const session = await stripe.identity.verificationSessions.create(sessionParams)
 
   await userRef.set(
     {

@@ -61,20 +61,20 @@ export async function POST(request: NextRequest) {
     }
 
     if (body.previewCloseMatches) {
-      const { closeMatchCount } = await findNearbyMatches(
+      const { closeMatchCount, closeMatches } = await findNearbyMatches(
         auth.uid,
         CLOSE_MATCHES_THRESHOLD_MILES,
         minCompatibility,
         { closeCountOnly: true },
       )
-      return NextResponse.json({ matches: [], closeMatchCount })
+      return NextResponse.json({ matches: [], closeMatchCount, closeMatches })
     }
 
     const maxDistance = Math.min(
       Math.max(requested, UNSUBSCRIBED_MIN_RADIUS_MILES),
       MAX_NEARBY_RADIUS_MILES,
     )
-    const { matches: allMatches, closeMatchCount } = await findNearbyMatches(
+    const { matches: allMatches, closeMatchCount, closeMatches } = await findNearbyMatches(
       auth.uid,
       maxDistance,
       minCompatibility,
@@ -85,7 +85,7 @@ export async function POST(request: NextRequest) {
       return miles >= CLOSE_MATCHES_THRESHOLD_MILES
     })
 
-    return NextResponse.json({ matches, closeMatchCount })
+    return NextResponse.json({ matches, closeMatchCount, closeMatches })
   } catch (error) {
     const { message, status } = apiErrorResponse(error)
     console.error('[matches/nearby]', auth.uid, message)

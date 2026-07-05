@@ -35,15 +35,18 @@ App Store Server Notifications v2 →
 ## 4. Stripe Identity (iOS verification gate)
 
 1. Enable **Stripe Identity** in the Stripe Dashboard.
-2. Configure verification flow type **Document** (government ID + selfie). Enable **Verify phone** (OTP). Leave **Verify email** unchecked unless you want both. Set return URL to `https://ridgits.com/identity/complete` (Stripe requires https; that page redirects to `ridgits://identity/complete` in the iOS app).
-3. Add webhook endpoint → `https://ridgits-api.vercel.app/api/webhooks/stripe-identity`
-4. Subscribe to: `identity.verification_session.verified`, `identity.verification_session.requires_input`, `identity.verification_session.canceled`
-5. Set Vercel env vars:
+2. Create a **Verification flow** (Identity → Verification flows) with **Document + selfie + phone OTP** enabled.
+3. Copy the flow ID (`vf_...`) into Vercel as `STRIPE_IDENTITY_VERIFICATION_FLOW_ID`.
+4. Configure return URL to `https://ridgits.com/identity/complete` (Stripe requires https; that page redirects to `ridgits://identity/complete` in the iOS app).
+5. Add webhook endpoint → `https://ridgits-api.vercel.app/api/webhooks/stripe-identity`
+6. Subscribe to: `identity.verification_session.verified`, `identity.verification_session.requires_input`, `identity.verification_session.canceled`
+7. Set Vercel env vars:
 
 ```
 STRIPE_SECRET_KEY=sk_...
 STRIPE_WEBHOOK_SECRET=whsec_...
 STRIPE_IDENTITY_RETURN_URL=https://ridgits.com/identity/complete
+STRIPE_IDENTITY_VERIFICATION_FLOW_ID=vf_...
 SIGHTENGINE_API_USER=...
 SIGHTENGINE_API_SECRET=...
 RIDGITS_IDENTITY_FACE_MATCH_THRESHOLD=0.90

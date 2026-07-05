@@ -41,12 +41,25 @@ export type NearbyMatchScanOptions = {
   includeCloseMatchesInResults?: boolean
 }
 
+export type CloseMatchPreview = {
+  userId: string
+  name: string
+  image: string
+}
+
+export type CloseMatchScanResult = {
+  count: number
+  previews: CloseMatchPreview[]
+}
+
 export type NearbyMatchScanResult = {
   matches: Record<string, unknown>[]
   closeMatchCount: number
+  closeMatches: CloseMatchPreview[]
 }
 
 const MAX_CANDIDATES = 120
+const MAX_CLOSE_MATCH_PREVIEWS = 3
 const PROFILE_BATCH_SIZE = 10
 
 function demoAnswer(quiz: ReturnType<typeof normalizeQuizProgress>, key: string, fallbackIndex: number) {
@@ -204,22 +217,24 @@ function passesProfileFilters(
   return true
 }
 
-/** Count close matches from the full scored pool using metro shortcut + stored coords only. */
-async function computeCloseMatchCount(
+/** Count close matches and pick top previews from the full scored pool (metro + stored coords). */
+async function computeCloseMatches(
   scored: ScoredCandidate[],
   mergedProfile: Record<string, unknown>,
   myCoords: Coords,
   hasAgeRange: boolean,
   ageRangeMin: number | null,
   ageRangeMax: number | null,
-): Promise<number> {
-  if (scored.length === 0) return 0
+): Promise<CloseMatchScanResult> {
+  if (scored.length === 0) return { count: 0, previews: [] }
 
   const allIds = scored.map((entry) => entry.userId)
   const verifiedEmailMap = await getVerifiedEmailMap(allIds)
   const { profileById, userById } = await loadProfileMaps(allIds)
 
-  let closeMatchCount = 0
+  let count = 0
+  const previews: CloseMatchPreview[] = []
+
   for (const { userId } of scored) {
     const publicProfile = profileById.get(userId)
     const privateProfile = userById.get(userId)
@@ -240,12 +255,19 @@ async function computeCloseMatchCount(
 
     const mergedOther = { ...privateProfile, ...publicProfile }
     const distance = resolveCloseDistanceMiles(myCoords, mergedProfile, mergedOther)
-    if (isCloseDistance(distance)) {
-      closeMatchCount += 1
-    }
+    if (!isCloseDistance(distance)) continue
+
+    count += 1
+    if (previews.length >= MAX_CLOSE_MATCH_PREVIEWS) continue
+
+    const name = String(publicProfile.name ?? '').trim()
+    const image = String(publicProfile.image ?? '').trim()
+    if (!name || name.toLowerCase() === 'anonymous' || !image) continue
+
+    previews.push({ userId, name, image })
   }
 
-  return closeMatchCount
+  return { count, previews }
 }
 
 function resolveDistanceMiles(
@@ -286,7 +308,7 @@ export async function findNearbyMatches(
 
   if (!userQuizSnap.exists) {
     if (isQuizCompleteForMatching({}, userProfile)) {
-      return { matches: [], closeMatchCount: 0 }
+      return { matches: [], closeMatchCount: 0, closeMatches: [] }
     }
     throw new ApiError('Complete the quiz before matching.', 412)
   }
@@ -345,8 +367,8 @@ export async function findNearbyMatches(
   scored.sort((a, b) => b.compat.overall - a.compat.overall)
 
   const shouldComputeCloseCount = closeCountOnly || includeCloseCount
-  const closeMatchCount = shouldComputeCloseCount
-    ? await computeCloseMatchCount(
+  const closeScan = shouldComputeCloseCount
+    ? await computeCloseMatches(
         scored,
         mergedProfile,
         myCoords,
@@ -354,10 +376,10 @@ export async function findNearbyMatches(
         ageRangeMin,
         ageRangeMax,
       )
-    : 0
+    : { count: 0, previews: [] }
 
   if (closeCountOnly) {
-    return { matches: [], closeMatchCount }
+    return { matches: [], closeMatchCount: closeScan.count, closeMatches: closeScan.previews }
   }
 
   const candidateIds = scored.slice(0, MAX_CANDIDATES).map((entry) => entry.userId)
@@ -481,6 +503,7 @@ export async function findNearbyMatches(
   matches.sort((a, b) => (b.overall as number) - (a.overall as number))
   return {
     matches: matches.map(formatMatchForClient),
-    closeMatchCount: includeCloseCount ? closeMatchCount : 0,
+    closeMatchCount: includeCloseCount ? closeScan.count : 0,
+    closeMatches: includeCloseCount ? closeScan.previews : [],
   }
 }
