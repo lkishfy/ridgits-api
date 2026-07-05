@@ -113,6 +113,26 @@ function buildNormalized(city: string, stateCode: string): NormalizedUSLocation 
   }
 }
 
+const US_COUNTRY_TOKENS = new Set([
+  'usa',
+  'u.s.a.',
+  'u.s.a',
+  'us',
+  'united states',
+  'united states of america',
+  'america',
+])
+
+/** Strip trailing country suffixes from comma-separated location parts. */
+export function stripTrailingCountryParts(parts: string[]): string[] {
+  if (parts.length === 0) return parts
+  const last = parts[parts.length - 1]!.trim().toLowerCase()
+  if (US_COUNTRY_TOKENS.has(last)) {
+    return stripTrailingCountryParts(parts.slice(0, -1))
+  }
+  return parts
+}
+
 function dedupeCityParts(parts: string[]): string {
   if (parts.length === 0) return ''
   if (parts.length === 1) return parts[0]!
@@ -136,7 +156,9 @@ export function normalizeUSLocation(
   const trimmed = input.trim()
   if (!trimmed) return null
 
-  const commaParts = trimmed.split(',').map((part) => part.trim()).filter(Boolean)
+  const commaParts = stripTrailingCountryParts(
+    trimmed.split(',').map((part) => part.trim()).filter(Boolean),
+  )
   if (commaParts.length >= 2) {
     const stateCode = resolveStateCode(commaParts[commaParts.length - 1]!)
     if (stateCode) {

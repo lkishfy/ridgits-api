@@ -7,7 +7,11 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "backfill:locations": "tsx scripts/backfill-profile-locations.ts"
+    "backfill:locations": "tsx scripts/backfill-profile-locations.ts",
+    "backfill:quiz-completion": "tsx scripts/backfill-quiz-completion.ts",
+    "diagnose:nearby": "tsx scripts/diagnose-nearby-matches.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "disposable-email-domains": "^1.0.62",
@@ -26,6 +30,7 @@
     "eslint": "^9",
     "eslint-config-next": "15.5.19",
     "tsx": "^4.19.4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^3.2.4"
   }
 }

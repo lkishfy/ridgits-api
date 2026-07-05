@@ -2,7 +2,9 @@ import { readProfileLocationFields, resolveProfileLocation } from '@/lib/locatio
 
 /** Lowercase tokens that indicate the NYC metro (city, boroughs, and inner suburbs). */
 const NYC_METRO_TOKENS = [
+  'new york city',
   'new york',
+  'nyc',
   'manhattan',
   'brooklyn',
   'queens',

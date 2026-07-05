@@ -133,6 +133,121 @@ export async function distanceMilesBetweenUsers(
   return Math.round(haversineMiles(coordsA.lat, coordsA.lng, coordsB.lat, coordsB.lng))
 }
 
+type ScoredCandidate = {
+  userId: string
+  compat: ReturnType<typeof calculateCompatibility>
+}
+
+function resolveCloseDistanceMiles(
+  myCoords: Coords,
+  myProfile: Record<string, unknown>,
+  otherProfile: Record<string, unknown>,
+): number | null {
+  if (sharedMetroArea(myProfile, otherProfile)) return 0
+
+  const otherCoords = readStoredCoords(otherProfile)
+  if (!otherCoords) return null
+
+  return haversineMiles(myCoords.lat, myCoords.lng, otherCoords.lat, otherCoords.lng)
+}
+
+async function loadProfileMaps(
+  candidateIds: string[],
+): Promise<{
+  profileById: Map<string, Record<string, unknown>>
+  userById: Map<string, Record<string, unknown>>
+}> {
+  const db = getDb()
+  const profileById = new Map<string, Record<string, unknown>>()
+  const userById = new Map<string, Record<string, unknown>>()
+
+  for (let i = 0; i < candidateIds.length; i += PROFILE_BATCH_SIZE) {
+    const batch = candidateIds.slice(i, i + PROFILE_BATCH_SIZE)
+    const [publicSnaps, userSnaps] = await Promise.all([
+      Promise.all(batch.map((id) => db.collection('publicProfiles').doc(id).get())),
+      Promise.all(batch.map((id) => db.collection('users').doc(id).get())),
+    ])
+    for (let j = 0; j < batch.length; j += 1) {
+      const id = batch[j]!
+      if (publicSnaps[j]?.exists) profileById.set(id, publicSnaps[j]!.data() ?? {})
+      if (userSnaps[j]?.exists) userById.set(id, userSnaps[j]!.data() ?? {})
+    }
+  }
+
+  return { profileById, userById }
+}
+
+function passesProfileFilters(
+  candidateId: string,
+  publicProfile: Record<string, unknown>,
+  privateProfile: Record<string, unknown>,
+  verifiedEmailMap: Map<string, boolean>,
+  hasAgeRange: boolean,
+  ageRangeMin: number | null,
+  ageRangeMax: number | null,
+): boolean {
+  if (verifiedEmailMap.get(candidateId) !== true) return false
+  if (!isVisibleInCommunity(publicProfile) || !isVisibleInCommunity(privateProfile)) return false
+
+  const name = String(publicProfile.name ?? '').trim()
+  const image = String(publicProfile.image ?? '').trim()
+  const about = String(publicProfile.about ?? '').trim()
+  const location = String(publicProfile.location ?? '').trim()
+  if (!name || name.toLowerCase() === 'anonymous' || !image || !about || !location) return false
+
+  if (hasAgeRange) {
+    const otherAge = privateProfile.age ? parseInt(String(privateProfile.age), 10) : null
+    if (otherAge === null || Number.isNaN(otherAge)) return false
+    if (otherAge < ageRangeMin! || otherAge > ageRangeMax!) return false
+  }
+
+  return true
+}
+
+/** Count close matches from the full scored pool using metro shortcut + stored coords only. */
+async function computeCloseMatchCount(
+  scored: ScoredCandidate[],
+  mergedProfile: Record<string, unknown>,
+  myCoords: Coords,
+  hasAgeRange: boolean,
+  ageRangeMin: number | null,
+  ageRangeMax: number | null,
+): Promise<number> {
+  if (scored.length === 0) return 0
+
+  const allIds = scored.map((entry) => entry.userId)
+  const verifiedEmailMap = await getVerifiedEmailMap(allIds)
+  const { profileById, userById } = await loadProfileMaps(allIds)
+
+  let closeMatchCount = 0
+  for (const { userId } of scored) {
+    const publicProfile = profileById.get(userId)
+    const privateProfile = userById.get(userId)
+    if (!publicProfile || !privateProfile) continue
+    if (
+      !passesProfileFilters(
+        userId,
+        publicProfile,
+        privateProfile,
+        verifiedEmailMap,
+        hasAgeRange,
+        ageRangeMin,
+        ageRangeMax,
+      )
+    ) {
+      continue
+    }
+
+    const mergedOther = { ...privateProfile, ...publicProfile }
+    const distance = resolveCloseDistanceMiles(myCoords, mergedProfile, mergedOther)
+    if (isCloseDistance(distance)) {
+      closeMatchCount += 1
+    }
+  }
+
+  return closeMatchCount
+}
+
 function resolveDistanceMiles(
   myCoords: Coords,
   myProfile: Record<string, unknown>,
@@ -150,11 +265,6 @@ function resolveDistanceMiles(
   if (!coords || !isInContinentalUS(coords.lat, coords.lng)) return null
 
   return haversineMiles(myCoords.lat, myCoords.lng, coords.lat, coords.lng)
-}
-
-type ScoredCandidate = {
-  userId: string
-  compat: ReturnType<typeof calculateCompatibility>
 }
 
 export async function findNearbyMatches(
@@ -233,26 +343,28 @@ export async function findNearbyMatches(
   }
 
   scored.sort((a, b) => b.compat.overall - a.compat.overall)
+
+  const shouldComputeCloseCount = closeCountOnly || includeCloseCount
+  const closeMatchCount = shouldComputeCloseCount
+    ? await computeCloseMatchCount(
+        scored,
+        mergedProfile,
+        myCoords,
+        hasAgeRange,
+        ageRangeMin,
+        ageRangeMax,
+      )
+    : 0
+
+  if (closeCountOnly) {
+    return { matches: [], closeMatchCount }
+  }
+
   const candidateIds = scored.slice(0, MAX_CANDIDATES).map((entry) => entry.userId)
   const compatById = new Map(scored.map((entry) => [entry.userId, entry.compat]))
 
   const verifiedEmailMap = await getVerifiedEmailMap(candidateIds)
-
-  const profileById = new Map<string, Record<string, unknown>>()
-  const userById = new Map<string, Record<string, unknown>>()
-
-  for (let i = 0; i < candidateIds.length; i += PROFILE_BATCH_SIZE) {
-    const batch = candidateIds.slice(i, i + PROFILE_BATCH_SIZE)
-    const [publicSnaps, userSnaps] = await Promise.all([
-      Promise.all(batch.map((id) => db.collection('publicProfiles').doc(id).get())),
-      Promise.all(batch.map((id) => db.collection('users').doc(id).get())),
-    ])
-    for (let j = 0; j < batch.length; j += 1) {
-      const id = batch[j]!
-      if (publicSnaps[j]?.exists) profileById.set(id, publicSnaps[j]!.data() ?? {})
-      if (userSnaps[j]?.exists) userById.set(id, userSnaps[j]!.data() ?? {})
-    }
-  }
+  const { profileById, userById } = await loadProfileMaps(candidateIds)
 
   const geocodeRequests: Array<{ userId: string; location: string; city?: string; stateCode?: string }> =
     []
@@ -284,7 +396,6 @@ export async function findNearbyMatches(
   const geocodeByLocation = await batchGeocodeLocations(geocodeRequests)
 
   const matches: Record<string, unknown>[] = []
-  let closeMatchCount = 0
 
   for (const candidateId of candidateIds) {
     if (verifiedEmailMap.get(candidateId) !== true) continue
@@ -342,12 +453,6 @@ export async function findNearbyMatches(
       }
     }
 
-    if (isCloseDistance(distance)) {
-      closeMatchCount += 1
-    }
-
-    if (closeCountOnly) continue
-
     if (isCloseDistance(distance) && includeCloseCount && !includeCloseMatchesInResults) {
       continue
     }
@@ -371,10 +476,6 @@ export async function findNearbyMatches(
       distance: Math.round(distance),
       archetype: completedSnap.docs.find((doc) => doc.id === candidateId)?.data()?.archetype ?? null,
     })
-  }
-
-  if (closeCountOnly) {
-    return { matches: [], closeMatchCount }
   }
 
   matches.sort((a, b) => (b.overall as number) - (a.overall as number))
