@@ -1,3 +1,9 @@
+/** demo_000 / demo_001 shared value for Woman / Women. */
+export const DEMO_GENDER_WOMAN = 0
+
+/** demo_000 shared value for Man / Men. */
+export const DEMO_GENDER_MAN = 1
+
 /** demo_001 / interested-in preference value for "Anyone/Everyone". */
 export const DEMO_INTERESTED_ANYONE = 4
 
@@ -105,14 +111,24 @@ export function areDemographicsCompatible(
   otherInterestedIn: unknown,
 ): boolean {
   if (!viewerHasDemographics(myGender, myInterestedIn)) return true
-  // When the other person hasn't set gender/intent yet, don't hide them from location-based results.
-  if (!viewerHasDemographics(otherGender, otherInterestedIn)) return true
+
+  const viewerSpecific = hasSpecificGenderInterest(myInterestedIn)
+  const otherGenders = toDemoNumberArray(otherGender)
+
+  if (viewerSpecific) {
+    // Women-only (etc.) seekers: require an explicit matching gender — never surface unknown profiles.
+    if (otherGenders.length === 0) return false
+    if (!checkGenderMatch(otherGender, myInterestedIn)) return false
+  } else if (!viewerHasDemographics(otherGender, otherInterestedIn)) {
+    // Open-to-anyone viewers can still discover people who haven't finished demographics.
+    return true
+  }
 
   if (!checkGenderMatch(myGender, otherInterestedIn)) return false
   if (!checkGenderMatch(otherGender, myInterestedIn)) return false
 
   // Women-only seekers shouldn't see people open to "Anyone/Everyone".
-  if (hasSpecificGenderInterest(myInterestedIn) && isOpenToAnyone(otherInterestedIn)) {
+  if (viewerSpecific && isOpenToAnyone(otherInterestedIn)) {
     return false
   }
 

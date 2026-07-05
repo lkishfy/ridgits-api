@@ -3,6 +3,7 @@ import { apiErrorResponse } from '@/lib/api-errors'
 import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
 import { findNearbyMatches } from '@/lib/matching/nearby'
 import { getNearbyAccess } from '@/lib/ridgits-subscription'
+import { repairStaleMembershipTier } from '@/lib/subscription-badge'
 import {
   CLOSE_MATCHES_THRESHOLD_MILES,
   MAX_NEARBY_RADIUS_MILES,
@@ -38,6 +39,7 @@ export async function POST(request: NextRequest) {
     typeof body.minCompatibility === 'number' ? body.minCompatibility : 5
 
   try {
+    await repairStaleMembershipTier(auth.uid)
     const access = await getNearbyAccess(auth.uid, auth.email)
     const requested =
       typeof body.maxDistance === 'number'

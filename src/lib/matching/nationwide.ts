@@ -21,7 +21,7 @@ import { effectiveSubscriptionTier } from '@/lib/subscription-badge'
 import { isProfilePhotoIdentityVerified } from '@/lib/trust-safety/profile-identity-match'
 
 export const NATIONWIDE_CACHE_TTL_MS = 24 * 60 * 60 * 1000
-export const NATIONWIDE_CACHE_VERSION = 18
+export const NATIONWIDE_CACHE_VERSION = 19
 
 function cachedMatchesNeedRecompute(matches: Record<string, unknown>[]): boolean {
   if (matches.length === 0) return true
@@ -133,9 +133,7 @@ export async function getTopNationwideMatches(uid: string, limit = 10, forceRefr
           ? await syncQuizProgressForMatching(uid, userQuizSnap.data() ?? {}, userProfile)
           : normalizeQuizProgress({})
         const demographicFiltered = await filterNationwideMatchesForViewer(validated, viewerQuiz)
-        if (validated.length === 0 || demographicFiltered.length > 0) {
-          return demographicFiltered.slice(0, limit).map(formatMatchForClient)
-        }
+        return demographicFiltered.slice(0, limit).map(formatMatchForClient)
       }
     }
   }

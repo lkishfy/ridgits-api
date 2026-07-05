@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
 import { purgeLockedPackQuizData } from '@/lib/ridgits-pack-access'
 import { getNearbyAccess } from '@/lib/ridgits-subscription'
-import { revokeSubscriptionBadgeIfInactive } from '@/lib/subscription-badge'
+import { revokeSubscriptionBadgeIfInactive, repairStaleMembershipTier } from '@/lib/subscription-badge'
 import { getIdentityStatus } from '@/lib/trust-safety/stripe-identity'
 
 export async function GET(request: NextRequest) {
@@ -10,6 +10,7 @@ export async function GET(request: NextRequest) {
   if (isNextResponse(auth)) return auth
 
   await revokeSubscriptionBadgeIfInactive(auth.uid)
+  await repairStaleMembershipTier(auth.uid)
   await purgeLockedPackQuizData(auth.uid)
   const access = await getNearbyAccess(auth.uid, auth.email)
   const identity = await getIdentityStatus(auth.uid)
