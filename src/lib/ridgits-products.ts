@@ -7,18 +7,18 @@ export const NEARBY_YEARLY_PRODUCT_ID = 'RidgitsNearbyYear2999'
 export const CLOSE_MATCHES_THRESHOLD_MILES = 30
 
 /** Ridgits+ minimum search radius (mi). */
-export const PLUS_MIN_RADIUS_MILES = 25
+export const PLUS_MIN_RADIUS_MILES = 10
 
-/** Ridgits Premium unlocks these closer radius presets (mi). */
-export const PREMIUM_RADIUS_PRESET_MILES = [0, 10] as const
+/** Ridgits Premium unlocks the 0 mi (metro) preset. */
+export const PREMIUM_RADIUS_PRESET_MILES = [0] as const
 
-/** Unsubscribed users search from 50 to 150 miles (closer radii require Ridgits+). */
-export const UNSUBSCRIBED_MIN_RADIUS_MILES = 50
+/** Free members search from 30 to 150 miles (closer radii require Ridgits+). */
+export const UNSUBSCRIBED_MIN_RADIUS_MILES = 30
 
 export const MAX_NEARBY_RADIUS_MILES = 150
 
 /** Quick-select radius chips (mi). Tier rules gate which values are selectable. */
-export const RADIUS_PRESET_MILES = [0, 10, 25, 50, 150] as const
+export const RADIUS_PRESET_MILES = [0, 10, 25, 30, 50, 150] as const
 
 export function nearbySearchMinRadiusMiles(tier: string | null | undefined): number {
   switch (tier) {

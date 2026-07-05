@@ -59,6 +59,7 @@ export async function POST(request: NextRequest) {
         {
           includeCloseCount: floor > 0,
           includeCloseMatchesInResults: includeCloseInResults,
+          closeMatchMetroOnly: tier === 'plus',
         },
       )
       const filtered =

@@ -41,6 +41,10 @@ export type NearbyMatchScanOptions = {
   closeCountOnly?: boolean
   includeCloseCount?: boolean
   includeCloseMatchesInResults?: boolean
+  /** Count matches closer than this (exclusive). Defaults to CLOSE_MATCHES_THRESHOLD_MILES. */
+  closeMatchThresholdMiles?: number
+  /** When true, only count same-metro matches (distance 0) for the close-match teaser. */
+  closeMatchMetroOnly?: boolean
 }
 
 export type CloseMatchPreview = {
@@ -86,8 +90,14 @@ function isWithinCoordinateBox(
   return Math.abs(lat - centerLat) <= latDelta && Math.abs(lng - centerLng) <= lngDelta
 }
 
-function isCloseDistance(distance: number | null): boolean {
-  return distance != null && distance >= 0 && distance < CLOSE_MATCHES_THRESHOLD_MILES
+function isCloseDistance(
+  distance: number | null,
+  thresholdMiles: number,
+  metroOnly = false,
+): boolean {
+  if (distance == null) return false
+  if (metroOnly) return distance === 0
+  return distance >= 0 && distance < thresholdMiles
 }
 
 async function resolveCoords(
@@ -229,6 +239,8 @@ async function computeCloseMatches(
   hasAgeRange: boolean,
   ageRangeMin: number | null,
   ageRangeMax: number | null,
+  closeMatchThresholdMiles: number,
+  closeMatchMetroOnly: boolean,
 ): Promise<CloseMatchScanResult> {
   if (scored.length === 0) return { count: 0, previews: [], userIds: [] }
 
@@ -260,7 +272,7 @@ async function computeCloseMatches(
 
     const mergedOther = { ...privateProfile, ...publicProfile }
     const distance = resolveCloseDistanceMiles(myCoords, mergedProfile, mergedOther)
-    if (!isCloseDistance(distance)) continue
+    if (!isCloseDistance(distance, closeMatchThresholdMiles, closeMatchMetroOnly)) continue
 
     count += 1
     userIds.push(userId)
@@ -302,8 +314,13 @@ export async function findNearbyMatches(
   minCompatibility = 5,
   options: NearbyMatchScanOptions = {},
 ): Promise<NearbyMatchScanResult> {
-  const { closeCountOnly = false, includeCloseCount = false, includeCloseMatchesInResults = false } =
-    options
+  const {
+    closeCountOnly = false,
+    includeCloseCount = false,
+    includeCloseMatchesInResults = false,
+    closeMatchThresholdMiles = CLOSE_MATCHES_THRESHOLD_MILES,
+    closeMatchMetroOnly = false,
+  } = options
   const db = getDb()
   const [userQuizSnap, userProfileSnap, userPublicSnap] = await Promise.all([
     db.collection('quizProgress').doc(uid).get(),
@@ -382,6 +399,8 @@ export async function findNearbyMatches(
         hasAgeRange,
         ageRangeMin,
         ageRangeMax,
+        closeMatchThresholdMiles,
+        closeMatchMetroOnly,
       )
     : { count: 0, previews: [], userIds: [] }
 
@@ -485,7 +504,11 @@ export async function findNearbyMatches(
       }
     }
 
-    if (isCloseDistance(distance) && includeCloseCount && !includeCloseMatchesInResults) {
+    if (
+      isCloseDistance(distance, closeMatchThresholdMiles, closeMatchMetroOnly) &&
+      includeCloseCount &&
+      !includeCloseMatchesInResults
+    ) {
       continue
     }
 
