@@ -123,6 +123,19 @@ const US_COUNTRY_TOKENS = new Set([
   'america',
 ])
 
+/** Bare city names that uniquely resolve to a US state when no comma/state is present. */
+const STANDALONE_US_CITIES: Record<string, string> = {
+  'new york': 'NY',
+  'new york city': 'NY',
+  nyc: 'NY',
+  brooklyn: 'NY',
+  manhattan: 'NY',
+  queens: 'NY',
+  bronx: 'NY',
+  'staten island': 'NY',
+  'long island': 'NY',
+}
+
 /** Strip trailing country suffixes from comma-separated location parts. */
 export function stripTrailingCountryParts(parts: string[]): string[] {
   if (parts.length === 0) return parts
@@ -183,6 +196,11 @@ export function normalizeUSLocation(
       const city = trailingStateName[1]!.replace(/,\s*$/, '').trim()
       if (city) return buildNormalized(city, stateCode)
     }
+  }
+
+  const standaloneState = STANDALONE_US_CITIES[trimmed.toLowerCase()]
+  if (standaloneState) {
+    return buildNormalized(trimmed, standaloneState)
   }
 
   return null

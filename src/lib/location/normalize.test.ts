@@ -47,6 +47,21 @@ describe('normalizeUSLocation', () => {
     expect(result?.city).toBe('NYC')
     expect(result?.stateCode).toBe('NY')
   })
+
+  it('parses bare New York as New York, NY', () => {
+    const result = normalizeUSLocation('New York')
+    expect(result?.display).toBe('New York, NY')
+  })
+
+  it('parses bare NYC as NYC, NY', () => {
+    const result = normalizeUSLocation('NYC')
+    expect(result?.display).toBe('NYC, NY')
+  })
+
+  it('parses bare Brooklyn as Brooklyn, NY', () => {
+    const result = normalizeUSLocation('Brooklyn')
+    expect(result?.display).toBe('Brooklyn, NY')
+  })
 })
 
 describe('metro area detection', () => {
@@ -66,5 +81,13 @@ describe('metro area detection', () => {
 
   it('does not match Brooklyn to Tacoma', () => {
     expect(sharedMetroArea({ location: 'Brooklyn, NY' }, { location: 'Tacoma, WA' })).toBe(false)
+  })
+
+  it('does not treat Rochester, New York as NYC metro', () => {
+    expect(isNYMetroArea({ location: 'Rochester, New York' })).toBe(false)
+  })
+
+  it('detects bare New York as NYC metro', () => {
+    expect(isNYMetroArea({ location: 'New York' })).toBe(true)
   })
 })

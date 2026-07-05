@@ -105,7 +105,8 @@ export function areDemographicsCompatible(
   otherInterestedIn: unknown,
 ): boolean {
   if (!viewerHasDemographics(myGender, myInterestedIn)) return true
-  if (!viewerHasDemographics(otherGender, otherInterestedIn)) return false
+  // When the other person hasn't set gender/intent yet, don't hide them from location-based results.
+  if (!viewerHasDemographics(otherGender, otherInterestedIn)) return true
 
   if (!checkGenderMatch(myGender, otherInterestedIn)) return false
   if (!checkGenderMatch(otherGender, myInterestedIn)) return false
