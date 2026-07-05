@@ -20,7 +20,7 @@ import { normalizeQuizProgress, syncQuizProgressForMatching } from '@/lib/matchi
 import { effectiveSubscriptionTier } from '@/lib/subscription-badge'
 
 export const NATIONWIDE_CACHE_TTL_MS = 24 * 60 * 60 * 1000
-export const NATIONWIDE_CACHE_VERSION = 17
+export const NATIONWIDE_CACHE_VERSION = 18
 
 function cachedMatchesNeedRecompute(matches: Record<string, unknown>[]): boolean {
   if (matches.length === 0) return true
@@ -86,8 +86,7 @@ async function filterNationwideMatchesForViewer(
 ): Promise<Record<string, unknown>[]> {
   const myGender = demoAnswer(viewerQuiz, 'demo_000', 0)
   const myInterestedIn = demoAnswer(viewerQuiz, 'demo_001', 1)
-  // Match nearby behavior: skip gender filtering until the viewer sets preferences.
-  if (!viewerHasDemographics(myGender, myInterestedIn)) return matches
+  if (!viewerHasDemographics(myGender, myInterestedIn)) return []
 
   const db = getDb()
   const filtered: Record<string, unknown>[] = []

@@ -30,6 +30,12 @@ export function toDemoNumberArray(value: unknown): number[] {
   return nums
 }
 
+const LEGACY_DEMO_KEY_BY_ID: Record<string, string> = {
+  demo_000: '0',
+  demo_001: '1',
+  demo_002: '2',
+}
+
 export function readDemoAnswer(
   answers: Record<string, unknown> | undefined,
   key: string,
@@ -37,10 +43,27 @@ export function readDemoAnswer(
   preferredAnswers?: Record<string, unknown>,
 ): unknown {
   if (!answers) answers = {}
-  let value = answers[key] ?? answers[String(fallbackIndex)]
-  if (value === undefined && preferredAnswers) {
-    value = preferredAnswers[key] ?? preferredAnswers[String(fallbackIndex)]
+
+  let value = answers[key]
+  if (value === undefined && key.startsWith('demo_')) {
+    const legacyKey = LEGACY_DEMO_KEY_BY_ID[key]
+    if (legacyKey) value = answers[legacyKey]
   }
+  if (value === undefined) {
+    value = answers[String(fallbackIndex)]
+  }
+
+  if (value === undefined && preferredAnswers) {
+    value = preferredAnswers[key]
+    if (value === undefined && key.startsWith('demo_')) {
+      const legacyKey = LEGACY_DEMO_KEY_BY_ID[key]
+      if (legacyKey) value = preferredAnswers[legacyKey]
+    }
+    if (value === undefined) {
+      value = preferredAnswers[String(fallbackIndex)]
+    }
+  }
+
   return value
 }
 
