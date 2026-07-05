@@ -51,7 +51,16 @@ export async function POST(request: NextRequest) {
       const minRadius = nearbySearchMinRadiusMiles(tier)
       const floor = nearbyCloseMatchFloorMiles(tier, true)
       const maxDistance = Math.min(Math.max(requested, minRadius), MAX_NEARBY_RADIUS_MILES)
-      const { matches } = await findNearbyMatches(auth.uid, maxDistance, minCompatibility)
+      const includeCloseInResults = floor === 0
+      const { matches, closeMatchCount, closeMatches } = await findNearbyMatches(
+        auth.uid,
+        maxDistance,
+        minCompatibility,
+        {
+          includeCloseCount: floor > 0,
+          includeCloseMatchesInResults: includeCloseInResults,
+        },
+      )
       const filtered =
         floor > 0
           ? matches.filter((match) => {
@@ -59,7 +68,7 @@ export async function POST(request: NextRequest) {
               return miles >= floor
             })
           : matches
-      return NextResponse.json({ matches: filtered })
+      return NextResponse.json({ matches: filtered, closeMatchCount, closeMatches })
     }
 
     if (body.previewCloseMatches) {

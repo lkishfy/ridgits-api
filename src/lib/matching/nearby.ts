@@ -52,6 +52,8 @@ export type CloseMatchPreview = {
 export type CloseMatchScanResult = {
   count: number
   previews: CloseMatchPreview[]
+  /** All compatible user ids within the close-match radius (not only top previews). */
+  userIds: string[]
 }
 
 export type NearbyMatchScanResult = {
@@ -228,7 +230,7 @@ async function computeCloseMatches(
   ageRangeMin: number | null,
   ageRangeMax: number | null,
 ): Promise<CloseMatchScanResult> {
-  if (scored.length === 0) return { count: 0, previews: [] }
+  if (scored.length === 0) return { count: 0, previews: [], userIds: [] }
 
   const allIds = scored.map((entry) => entry.userId)
   const verifiedEmailMap = await getVerifiedEmailMap(allIds)
@@ -236,6 +238,7 @@ async function computeCloseMatches(
 
   let count = 0
   const previews: CloseMatchPreview[] = []
+  const userIds: string[] = []
 
   for (const { userId } of scored) {
     const publicProfile = profileById.get(userId)
@@ -260,6 +263,8 @@ async function computeCloseMatches(
     if (!isCloseDistance(distance)) continue
 
     count += 1
+    userIds.push(userId)
+
     if (previews.length >= MAX_CLOSE_MATCH_PREVIEWS) continue
 
     const name = String(publicProfile.name ?? '').trim()
@@ -269,7 +274,7 @@ async function computeCloseMatches(
     previews.push({ userId, name, image })
   }
 
-  return { count, previews }
+  return { count, previews, userIds }
 }
 
 function resolveDistanceMiles(
@@ -378,13 +383,16 @@ export async function findNearbyMatches(
         ageRangeMin,
         ageRangeMax,
       )
-    : { count: 0, previews: [] }
+    : { count: 0, previews: [], userIds: [] }
 
   if (closeCountOnly) {
     return { matches: [], closeMatchCount: closeScan.count, closeMatches: closeScan.previews }
   }
 
-  const candidateIds = scored.slice(0, MAX_CANDIDATES).map((entry) => entry.userId)
+  const topCandidateIds = scored.slice(0, MAX_CANDIDATES).map((entry) => entry.userId)
+  const topSet = new Set(topCandidateIds)
+  const extraCloseIds = closeScan.userIds.filter((id) => !topSet.has(id))
+  const candidateIds = [...topCandidateIds, ...extraCloseIds]
   const compatById = new Map(scored.map((entry) => [entry.userId, entry.compat]))
 
   const verifiedEmailMap = await getVerifiedEmailMap(candidateIds)
