@@ -41,6 +41,28 @@ npm install
 npm run dev
 ```
 
+## Admin scripts
+
+### Backfill profile coordinates
+
+Geocodes `users` + `publicProfiles` that are missing valid US coordinates (uses the same
+`locationCache` + Nominatim path as match scans). Run locally with Firebase Admin credentials.
+
+```bash
+cd ridgits-api
+cp .env.example .env.local   # if you have not already
+# Fill FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY in .env.local
+
+npm install
+npm run backfill:locations -- --dry-run          # preview only
+npm run backfill:locations -- --limit 50         # first 50 profiles that need geocoding
+npm run backfill:locations                       # all profiles that need geocoding
+npm run backfill:locations -- --uid YOUR_UID     # single account
+```
+
+Nominatim rate limits apply — keep `--limit` low on first runs. `metroAreaId` will be added
+when the top-50 metro registry ships; this script currently backfills coordinates only.
+
 ## Deploy (Vercel)
 
 1. Push this repo to GitHub (`lkishfy/ridgits-api`).
