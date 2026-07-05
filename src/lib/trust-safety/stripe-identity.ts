@@ -3,6 +3,7 @@ import type Stripe from 'stripe'
 import { ApiError } from '@/lib/api-errors'
 import { getDb } from '@/lib/firebase-admin'
 import { getStripe, isStripeConfigured } from '@/lib/stripe-client'
+import { hasActiveSubscriptionAccess } from '@/lib/ridgits-subscription'
 import { matchProfilePhotoToIdentity } from '@/lib/trust-safety/profile-identity-match'
 import {
   assertPhoneNotAlreadyClaimed,
@@ -213,6 +214,17 @@ export async function createIdentityVerificationSession(
     throw new ApiError('Identity verification is not configured.', 503, 'IDENTITY_UNAVAILABLE')
   }
 
+  const userRef = getDb().collection('users').doc(uid)
+  const userSnap = await userRef.get()
+  const userData = userSnap.data() ?? {}
+  if (!hasActiveSubscriptionAccess(userData)) {
+    throw new ApiError(
+      'Subscribe first to unlock identity verification.',
+      403,
+      'SUBSCRIPTION_REQUIRED',
+    )
+  }
+
   const currentStatus = await getIdentityStatus(uid)
   if (currentStatus.identityVerificationStatus === 'verified') {
     const phoneOk =
@@ -223,8 +235,6 @@ export async function createIdentityVerificationSession(
   }
 
   const stripe = getStripe()
-  const userRef = getDb().collection('users').doc(uid)
-  const userSnap = await userRef.get()
   const existingSessionId = userSnap.get('stripeVerificationSessionId') as string | undefined
 
   if (existingSessionId) {
