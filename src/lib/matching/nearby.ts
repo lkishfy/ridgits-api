@@ -3,7 +3,6 @@ import { ApiError } from '@/lib/api-errors'
 import { getDb } from '@/lib/firebase-admin'
 import {
   calculateCompatibility,
-  checkGenderMatch,
   toArrayOrEmpty,
   arraysOverlap,
   haversineMiles,
@@ -11,6 +10,11 @@ import {
   formatMatchForClient,
   isVisibleInCommunity,
 } from '@/lib/matching/compatibility'
+import {
+  areDemographicsCompatible,
+  readDemoAnswer,
+  viewerHasDemographics,
+} from '@/lib/matching/demographics'
 import {
   locationCacheKey,
   readProfileLocationFields,
@@ -39,7 +43,7 @@ export type NearbyMatchScanResult = {
 }
 
 function demoAnswer(quiz: ReturnType<typeof normalizeQuizProgress>, key: string, fallbackIndex: number) {
-  return quiz.answers[key] ?? quiz.answers[String(fallbackIndex)]
+  return readDemoAnswer(quiz.answers, key, fallbackIndex)
 }
 
 type Coords = { lat: number; lng: number }
@@ -143,8 +147,9 @@ export async function findNearbyMatches(
   }
 
   const myGender = demoAnswer(userQuiz, 'demo_000', 0)
-  const myLookingFor = demoAnswer(userQuiz, 'demo_001', 1)
+  const myInterestedIn = demoAnswer(userQuiz, 'demo_001', 1)
   const myIntent = toArrayOrEmpty(demoAnswer(userQuiz, 'demo_002', 2))
+  const viewerDemographicsSet = viewerHasDemographics(myGender, myInterestedIn)
 
   const ageRangeMin = userProfile.ageRangeMin ? parseInt(String(userProfile.ageRangeMin), 10) : null
   const ageRangeMax = userProfile.ageRangeMax ? parseInt(String(userProfile.ageRangeMax), 10) : null
@@ -168,11 +173,12 @@ export async function findNearbyMatches(
     if (verifiedEmailMap.get(doc.id) !== true) continue
     const otherQuiz = normalizeQuizProgress(doc.data())
 
-    if (myGender !== undefined && myLookingFor !== undefined) {
+    if (viewerDemographicsSet) {
       const otherGender = demoAnswer(otherQuiz, 'demo_000', 0)
-      const otherLookingFor = demoAnswer(otherQuiz, 'demo_001', 1)
-      if (otherGender === undefined || otherLookingFor === undefined) continue
-      if (!checkGenderMatch(myGender, otherLookingFor) || !checkGenderMatch(otherGender, myLookingFor)) {
+      const otherInterestedIn = demoAnswer(otherQuiz, 'demo_001', 1)
+      if (
+        !areDemographicsCompatible(myGender, myInterestedIn, otherGender, otherInterestedIn)
+      ) {
         continue
       }
     }

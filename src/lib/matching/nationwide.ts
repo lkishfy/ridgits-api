@@ -2,19 +2,23 @@ import { FieldValue, Timestamp } from 'firebase-admin/firestore'
 import { getDb } from '@/lib/firebase-admin'
 import {
   calculateCompatibility,
-  checkGenderMatch,
   toArrayOrEmpty,
   arraysOverlap,
   formatMatchForClient,
   isVisibleInCommunity,
   readMatchOverallScore,
 } from '@/lib/matching/compatibility'
+import {
+  areDemographicsCompatible,
+  readDemoAnswer,
+  viewerHasDemographics,
+} from '@/lib/matching/demographics'
 import { normalizeQuizProgress, syncQuizProgressForMatching } from '@/lib/matching/quiz-normalize'
 import { effectiveSubscriptionTier } from '@/lib/subscription-badge'
 import { distanceMilesBetweenUsers } from '@/lib/matching/nearby'
 
 export const NATIONWIDE_CACHE_TTL_MS = 24 * 60 * 60 * 1000
-export const NATIONWIDE_CACHE_VERSION = 14
+export const NATIONWIDE_CACHE_VERSION = 15
 
 function cachedMatchesNeedRecompute(matches: Record<string, unknown>[]): boolean {
   if (matches.length === 0) return false
@@ -58,7 +62,40 @@ async function validateNationwideMatches(matches: Record<string, unknown>[]) {
 }
 
 function demoAnswer(quiz: ReturnType<typeof normalizeQuizProgress>, key: string, fallbackIndex: number) {
-  return quiz.answers[key] ?? quiz.answers[String(fallbackIndex)]
+  return readDemoAnswer(quiz.answers, key, fallbackIndex)
+}
+
+async function filterNationwideMatchesForViewer(
+  uid: string,
+  matches: Record<string, unknown>[],
+  viewerQuiz: ReturnType<typeof normalizeQuizProgress>,
+): Promise<Record<string, unknown>[]> {
+  const myGender = demoAnswer(viewerQuiz, 'demo_000', 0)
+  const myInterestedIn = demoAnswer(viewerQuiz, 'demo_001', 1)
+  if (!viewerHasDemographics(myGender, myInterestedIn)) return matches
+
+  const db = getDb()
+  const filtered: Record<string, unknown>[] = []
+
+  for (const match of matches) {
+    const userId = String(match.userId ?? '').trim()
+    if (!userId) continue
+
+    const otherSnap = await db.collection('quizProgress').doc(userId).get()
+    if (!otherSnap.exists) continue
+
+    const other = normalizeQuizProgress(otherSnap.data() ?? {})
+    const otherGender = demoAnswer(other, 'demo_000', 0)
+    const otherInterestedIn = demoAnswer(other, 'demo_001', 1)
+
+    if (
+      areDemographicsCompatible(myGender, myInterestedIn, otherGender, otherInterestedIn)
+    ) {
+      filtered.push(match)
+    }
+  }
+
+  return filtered
 }
 
 export async function getTopNationwideMatches(uid: string, limit = 10, forceRefresh = false) {
@@ -74,7 +111,14 @@ export async function getTopNationwideMatches(uid: string, limit = 10, forceRefr
       const cached = (cache.matches as Record<string, unknown>[]) ?? []
       if (!cachedMatchesNeedRecompute(cached)) {
         const validated = await validateNationwideMatches(cached)
-        return validated.slice(0, limit).map(formatMatchForClient)
+        const userQuizSnap = await getDb().collection('quizProgress').doc(uid).get()
+        const userProfileSnap = await getDb().collection('users').doc(uid).get()
+        const userProfile = userProfileSnap.exists ? (userProfileSnap.data() ?? {}) : {}
+        const viewerQuiz = userQuizSnap.exists
+          ? await syncQuizProgressForMatching(uid, userQuizSnap.data() ?? {}, userProfile)
+          : normalizeQuizProgress({})
+        const demographicFiltered = await filterNationwideMatchesForViewer(uid, validated, viewerQuiz)
+        return demographicFiltered.slice(0, limit).map(formatMatchForClient)
       }
     }
   }
@@ -112,8 +156,9 @@ export async function computeTopNationwideMatchesInternal(uid: string) {
   const viewerProfile = { ...userProfile, ...userPublic }
 
   const myGender = demoAnswer(userQuiz, 'demo_000', 0)
-  const myLookingFor = demoAnswer(userQuiz, 'demo_001', 1)
+  const myInterestedIn = demoAnswer(userQuiz, 'demo_001', 1)
   const myIntent = toArrayOrEmpty(demoAnswer(userQuiz, 'demo_002', 2))
+  const viewerDemographicsSet = viewerHasDemographics(myGender, myInterestedIn)
 
   const ageRangeMin = userProfile.ageRangeMin ? parseInt(String(userProfile.ageRangeMin), 10) : null
   const ageRangeMax = userProfile.ageRangeMax ? parseInt(String(userProfile.ageRangeMax), 10) : null
@@ -131,11 +176,12 @@ export async function computeTopNationwideMatchesInternal(uid: string) {
     const otherRaw = doc.data()
     const other = normalizeQuizProgress(otherRaw)
 
-    if (myGender !== undefined && myLookingFor !== undefined) {
+    if (viewerDemographicsSet) {
       const otherGender = demoAnswer(other, 'demo_000', 0)
-      const otherLookingFor = demoAnswer(other, 'demo_001', 1)
-      if (otherGender === undefined || otherLookingFor === undefined) continue
-      if (!checkGenderMatch(myGender, otherLookingFor) || !checkGenderMatch(otherGender, myLookingFor)) {
+      const otherInterestedIn = demoAnswer(other, 'demo_001', 1)
+      if (
+        !areDemographicsCompatible(myGender, myInterestedIn, otherGender, otherInterestedIn)
+      ) {
         continue
       }
     }

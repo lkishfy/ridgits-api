@@ -157,25 +157,10 @@ export function toArrayOrEmpty(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [value]
 }
 
+export { checkGenderMatch } from '@/lib/matching/demographics'
+
 export function arraysOverlap(a: unknown[], b: unknown[]): boolean {
   return a.some((item) => b.includes(item))
-}
-
-export function checkGenderMatch(userGender: unknown, lookingForPreference: unknown): boolean {
-  const userGenderArray = Array.isArray(userGender) ? userGender : [userGender]
-  const lookingForArray = Array.isArray(lookingForPreference) ? lookingForPreference : [lookingForPreference]
-
-  if (lookingForArray.includes(4)) return true
-
-  for (const gender of userGenderArray) {
-    if (lookingForArray.includes(gender)) return true
-    if (gender === 0 && lookingForArray.includes(0)) return true
-    if (gender === 1 && lookingForArray.includes(1)) return true
-    if (gender === 2 && lookingForArray.includes(2)) return true
-    if (gender === 3 && lookingForArray.includes(3)) return true
-    if (gender === 4 && lookingForArray.length > 0) return true
-  }
-  return false
 }
 
 export function haversineMiles(
