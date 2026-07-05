@@ -59,7 +59,7 @@ export type NearbyMatchScanResult = {
 }
 
 const MAX_CANDIDATES = 120
-const MAX_CLOSE_MATCH_PREVIEWS = 3
+const MAX_CLOSE_MATCH_PREVIEWS = 5
 const PROFILE_BATCH_SIZE = 10
 
 function demoAnswer(quiz: ReturnType<typeof normalizeQuizProgress>, key: string, fallbackIndex: number) {
