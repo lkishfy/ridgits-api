@@ -73,9 +73,35 @@ function timestampToIso(value: unknown): string | null {
   return null
 }
 
+/** Pull latest verification state from Stripe when Firestore is stale (e.g. webhook missed). */
+async function syncIdentityStatusFromStripeIfNeeded(
+  uid: string,
+  data: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const sessionId = String(data.stripeVerificationSessionId ?? '').trim()
+  if (!sessionId || !isStripeConfigured()) return data
+
+  const identityOk = data.identityVerificationStatus === 'verified'
+  const phoneOk =
+    !identityRequiresPhoneVerification() || data.phoneVerificationStatus === 'verified'
+  if (identityOk && phoneOk) return data
+
+  try {
+    const stripe = getStripe()
+    const session = await stripe.identity.verificationSessions.retrieve(sessionId)
+    await applyVerificationSessionUpdate(session)
+    const refreshed = await getDb().collection('users').doc(uid).get()
+    return refreshed.data() ?? data
+  } catch (error) {
+    console.error('[stripe-identity] sync from Stripe failed', uid, sessionId, error)
+  }
+
+  return data
+}
+
 export async function getIdentityStatus(uid: string): Promise<IdentityStatusPayload> {
   const snap = await getDb().collection('users').doc(uid).get()
-  const data = snap.data() ?? {}
+  const data = await syncIdentityStatusFromStripeIfNeeded(uid, snap.data() ?? {})
 
   const identityVerificationStatus = (data.identityVerificationStatus as IdentityVerificationStatus | undefined) ?? 'none'
   const phoneVerificationStatus = (data.phoneVerificationStatus as PhoneVerificationStatus | undefined) ?? 'none'
@@ -94,31 +120,27 @@ export async function getIdentityStatus(uid: string): Promise<IdentityStatusPayl
     profilePhotoIdentityMatchAt: timestampToIso(data.profilePhotoIdentityMatchAt),
     profilePhotoIdentityMatchScore:
       typeof data.profilePhotoIdentityMatchScore === 'number' ? data.profilePhotoIdentityMatchScore : null,
-    canSubscribe: identityOk && phoneOk,
-    canMessage: identityOk && phoneOk && profilePhotoIdentityMatchStatus === 'verified',
+    canSubscribe: true,
+    canMessage: identityOk && phoneOk,
   }
 }
 
 export async function requireIdentityVerified(uid: string): Promise<void> {
-  const snap = await getDb().collection('users').doc(uid).get()
-  const status = String(snap.get('identityVerificationStatus') ?? '')
-  if (status !== 'verified') {
+  const status = await getIdentityStatus(uid)
+  if (status.identityVerificationStatus !== 'verified') {
     throw new ApiError(
-      'Identity verification required before subscribing.',
+      'Identity verification required before messaging.',
       403,
       'IDENTITY_VERIFICATION_REQUIRED',
     )
   }
 
-  if (identityRequiresPhoneVerification()) {
-    const phoneStatus = String(snap.get('phoneVerificationStatus') ?? '')
-    if (phoneStatus !== 'verified') {
-      throw new ApiError(
-        'Phone verification required before subscribing.',
-        403,
-        'PHONE_VERIFICATION_REQUIRED',
-      )
-    }
+  if (identityRequiresPhoneVerification() && status.phoneVerificationStatus !== 'verified') {
+    throw new ApiError(
+      'Phone verification required before messaging.',
+      403,
+      'PHONE_VERIFICATION_REQUIRED',
+    )
   }
 }
 
