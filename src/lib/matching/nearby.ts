@@ -6,7 +6,6 @@ import {
   toArrayOrEmpty,
   arraysOverlap,
   haversineMiles,
-  geocodeLocation,
   formatMatchForClient,
   isVisibleInCommunity,
 } from '@/lib/matching/compatibility'
@@ -20,6 +19,14 @@ import {
   readProfileLocationFields,
   resolveProfileLocation,
 } from '@/lib/location/normalize'
+import { sharedMetroArea } from '@/lib/location/metro-areas'
+import {
+  batchGeocodeLocations,
+  coordsNeedRefresh,
+  geocodeLocationCached,
+  readStoredCoords,
+  type Coords,
+} from '@/lib/matching/geocode-cache'
 import {
   isQuizCompleteForMatching,
   normalizeQuizProgress,
@@ -29,11 +36,8 @@ import { getVerifiedEmailMap } from '@/lib/trust-safety/email-verification'
 import { CLOSE_MATCHES_THRESHOLD_MILES } from '@/lib/ridgits-products'
 
 export type NearbyMatchScanOptions = {
-  /** Only count people within (0, CLOSE_MATCHES_THRESHOLD_MILES); do not return match payloads. */
   closeCountOnly?: boolean
-  /** When true, track closeMatchCount while building the full match list in one pass. */
   includeCloseCount?: boolean
-  /** When true with includeCloseCount, close matches are still returned in the match list. */
   includeCloseMatchesInResults?: boolean
 }
 
@@ -42,39 +46,59 @@ export type NearbyMatchScanResult = {
   closeMatchCount: number
 }
 
+const MAX_CANDIDATES = 120
+const PROFILE_BATCH_SIZE = 10
+
 function demoAnswer(quiz: ReturnType<typeof normalizeQuizProgress>, key: string, fallbackIndex: number) {
   return readDemoAnswer(quiz.answers, key, fallbackIndex, quiz.preferredAnswers)
 }
 
-type Coords = { lat: number; lng: number }
+function isInContinentalUS(lat: number, lng: number): boolean {
+  return lat >= 24.5 && lat <= 49.0 && lng >= -125.0 && lng <= -66.9
+}
+
+function isWithinCoordinateBox(
+  lat: number,
+  lng: number,
+  centerLat: number,
+  centerLng: number,
+  maxMiles: number,
+): boolean {
+  const latDelta = maxMiles / 69
+  const lngDelta = maxMiles / Math.max(69 * Math.cos((centerLat * Math.PI) / 180), 0.01)
+  return Math.abs(lat - centerLat) <= latDelta && Math.abs(lng - centerLng) <= lngDelta
+}
+
+function isCloseDistance(distance: number | null): boolean {
+  return distance != null && distance >= 0 && distance < CLOSE_MATCHES_THRESHOLD_MILES
+}
 
 async function resolveCoords(
   uid: string,
   profile: Record<string, unknown>,
   collection: 'users' | 'publicProfiles',
 ): Promise<Coords | null> {
+  const stored = readStoredCoords(profile)
+  if (stored && isInContinentalUS(stored.lat, stored.lng) && !coordsNeedRefresh(profile)) {
+    return stored
+  }
+
   const fields = readProfileLocationFields(profile)
   const normalized = resolveProfileLocation(profile)
   const cacheKey = locationCacheKey(profile)
-
-  const cached = profile.coordinates as Coords | undefined
-  const updatedAt = profile.coordinatesUpdatedAt
-  const geocodedFrom = String(profile.geocodedFromLocation ?? '').trim()
-  if (cached?.lat != null && cached?.lng != null && updatedAt && geocodedFrom === cacheKey) {
-    const age =
-      updatedAt instanceof Object && 'toMillis' in updatedAt
-        ? Date.now() - (updatedAt as { toMillis: () => number }).toMillis()
-        : Date.now()
-    if (age < 30 * 24 * 60 * 60 * 1000) return cached
+  if (!fields.location && !normalized) {
+    return stored && isInContinentalUS(stored.lat, stored.lng) ? stored : null
   }
 
-  if (!fields.location && !normalized) return null
+  const coords =
+    (await geocodeLocationCached(fields.location, {
+      city: fields.city || normalized?.city,
+      stateCode: fields.stateCode || normalized?.stateCode,
+    })) ??
+    stored ??
+    null
 
-  const coords = await geocodeLocation(fields.location, {
-    city: fields.city,
-    stateCode: fields.stateCode,
-  })
-  if (!coords) return null
+  if (!coords || !isInContinentalUS(coords.lat, coords.lng)) return null
 
   const db = getDb()
   const payload: Record<string, unknown> = {
@@ -102,10 +126,35 @@ export async function distanceMilesBetweenUsers(
   userBId: string,
   userBProfile: Record<string, unknown>,
 ): Promise<number | null> {
+  if (sharedMetroArea(userAProfile, userBProfile)) return 0
   const coordsA = await resolveCoords(userAId, userAProfile, 'users')
   const coordsB = await resolveCoords(userBId, userBProfile, 'publicProfiles')
   if (!coordsA || !coordsB) return null
   return Math.round(haversineMiles(coordsA.lat, coordsA.lng, coordsB.lat, coordsB.lng))
+}
+
+function resolveDistanceMiles(
+  myCoords: Coords,
+  myProfile: Record<string, unknown>,
+  otherProfile: Record<string, unknown>,
+  otherCoords: Coords | null,
+  geocodeByLocation: Map<string, Coords>,
+): number | null {
+  if (sharedMetroArea(myProfile, otherProfile)) return 0
+
+  let coords = otherCoords
+  if (!coords) {
+    const locationKey = String(otherProfile.location ?? '').trim().toLowerCase()
+    coords = geocodeByLocation.get(locationKey) ?? null
+  }
+  if (!coords || !isInContinentalUS(coords.lat, coords.lng)) return null
+
+  return haversineMiles(myCoords.lat, myCoords.lng, coords.lat, coords.lng)
+}
+
+type ScoredCandidate = {
+  userId: string
+  compat: ReturnType<typeof calculateCompatibility>
 }
 
 export async function findNearbyMatches(
@@ -160,25 +209,16 @@ export async function findNearbyMatches(
     !Number.isNaN(ageRangeMax)
 
   const completedSnap = await db.collection('quizProgress').where('completed', '==', true).get()
-  const matches: Record<string, unknown>[] = []
-  let closeMatchCount = 0
-
-  const candidateUids = completedSnap.docs.map((doc) => doc.id).filter((id) => id !== uid)
-  const verifiedEmailMap = await getVerifiedEmailMap(candidateUids)
+  const scored: ScoredCandidate[] = []
 
   for (const doc of completedSnap.docs) {
     if (doc.id === uid) continue
-    // Profiles with an unverified email never surface in community/matching, even if
-    // `visibleInCommunity` is true (trust & safety requirement).
-    if (verifiedEmailMap.get(doc.id) !== true) continue
     const otherQuiz = normalizeQuizProgress(doc.data())
 
     if (viewerDemographicsSet) {
       const otherGender = demoAnswer(otherQuiz, 'demo_000', 0)
       const otherInterestedIn = demoAnswer(otherQuiz, 'demo_001', 1)
-      if (
-        !areDemographicsCompatible(myGender, myInterestedIn, otherGender, otherInterestedIn)
-      ) {
+      if (!areDemographicsCompatible(myGender, myInterestedIn, otherGender, otherInterestedIn)) {
         continue
       }
     }
@@ -189,14 +229,72 @@ export async function findNearbyMatches(
     const compat = calculateCompatibility(userQuiz, otherQuiz)
     if (compat.overall < minCompatibility) continue
 
-    const [publicSnap, userSnap] = await Promise.all([
-      db.collection('publicProfiles').doc(doc.id).get(),
-      db.collection('users').doc(doc.id).get(),
-    ])
-    if (!publicSnap.exists || !userSnap.exists) continue
+    scored.push({ userId: doc.id, compat })
+  }
 
-    const p = publicSnap.data() ?? {}
-    const otherUser = userSnap.exists ? (userSnap.data() ?? {}) : {}
+  scored.sort((a, b) => b.compat.overall - a.compat.overall)
+  const candidateIds = scored.slice(0, MAX_CANDIDATES).map((entry) => entry.userId)
+  const compatById = new Map(scored.map((entry) => [entry.userId, entry.compat]))
+
+  const verifiedEmailMap = await getVerifiedEmailMap(candidateIds)
+
+  const profileById = new Map<string, Record<string, unknown>>()
+  const userById = new Map<string, Record<string, unknown>>()
+
+  for (let i = 0; i < candidateIds.length; i += PROFILE_BATCH_SIZE) {
+    const batch = candidateIds.slice(i, i + PROFILE_BATCH_SIZE)
+    const [publicSnaps, userSnaps] = await Promise.all([
+      Promise.all(batch.map((id) => db.collection('publicProfiles').doc(id).get())),
+      Promise.all(batch.map((id) => db.collection('users').doc(id).get())),
+    ])
+    for (let j = 0; j < batch.length; j += 1) {
+      const id = batch[j]!
+      if (publicSnaps[j]?.exists) profileById.set(id, publicSnaps[j]!.data() ?? {})
+      if (userSnaps[j]?.exists) userById.set(id, userSnaps[j]!.data() ?? {})
+    }
+  }
+
+  const geocodeRequests: Array<{ userId: string; location: string; city?: string; stateCode?: string }> =
+    []
+
+  for (const candidateId of candidateIds) {
+    if (verifiedEmailMap.get(candidateId) !== true) continue
+    const publicProfile = profileById.get(candidateId)
+    const privateProfile = userById.get(candidateId)
+    if (!publicProfile || !privateProfile) continue
+    if (!isVisibleInCommunity(publicProfile) || !isVisibleInCommunity(privateProfile)) continue
+
+    const merged = { ...privateProfile, ...publicProfile }
+    const location = String(publicProfile.location ?? '').trim()
+    if (!location) continue
+
+    if (sharedMetroArea(mergedProfile, merged)) continue
+    if (readStoredCoords(merged) && !coordsNeedRefresh(merged)) continue
+
+    const fields = readProfileLocationFields(merged)
+    const normalized = resolveProfileLocation(merged)
+    geocodeRequests.push({
+      userId: candidateId,
+      location,
+      city: fields.city || normalized?.city,
+      stateCode: fields.stateCode || normalized?.stateCode,
+    })
+  }
+
+  const geocodeByLocation = await batchGeocodeLocations(geocodeRequests)
+
+  const matches: Record<string, unknown>[] = []
+  let closeMatchCount = 0
+
+  for (const candidateId of candidateIds) {
+    if (verifiedEmailMap.get(candidateId) !== true) continue
+
+    const publicProfile = profileById.get(candidateId)
+    const privateProfile = userById.get(candidateId)
+    if (!publicProfile || !privateProfile) continue
+
+    const p = publicProfile
+    const otherUser = privateProfile
     if (!isVisibleInCommunity(p) || !isVisibleInCommunity(otherUser)) continue
 
     const name = String(p.name ?? '').trim()
@@ -211,29 +309,53 @@ export async function findNearbyMatches(
       if (otherAge < ageRangeMin! || otherAge > ageRangeMax!) continue
     }
 
-    const otherCoords = await resolveCoords(doc.id, { ...otherUser, ...p }, 'publicProfiles')
-    if (!otherCoords) continue
+    const mergedOther = { ...otherUser, ...p }
+    const compat = compatById.get(candidateId)
+    if (!compat) continue
 
-    const distance = haversineMiles(myCoords.lat, myCoords.lng, otherCoords.lat, otherCoords.lng)
+    let distance = resolveDistanceMiles(
+      myCoords,
+      mergedProfile,
+      mergedOther,
+      readStoredCoords(mergedOther),
+      geocodeByLocation,
+    )
 
-    const isCloseMatch =
-      distance > 0 && distance < CLOSE_MATCHES_THRESHOLD_MILES
-    if (isCloseMatch) {
+    if (distance == null) continue
+
+    if (distance > 0) {
+      const otherCoords =
+        readStoredCoords(mergedOther) ??
+        geocodeByLocation.get(location.trim().toLowerCase()) ??
+        null
+      if (
+        !otherCoords ||
+        !isWithinCoordinateBox(
+          otherCoords.lat,
+          otherCoords.lng,
+          myCoords.lat,
+          myCoords.lng,
+          Math.max(maxDistance, CLOSE_MATCHES_THRESHOLD_MILES),
+        )
+      ) {
+        continue
+      }
+    }
+
+    if (isCloseDistance(distance)) {
       closeMatchCount += 1
     }
 
-    if (closeCountOnly) {
-      continue
-    }
+    if (closeCountOnly) continue
 
-    if (isCloseMatch && includeCloseCount && !includeCloseMatchesInResults) {
+    if (isCloseDistance(distance) && includeCloseCount && !includeCloseMatchesInResults) {
       continue
     }
 
     if (distance > maxDistance) continue
 
     matches.push({
-      userId: doc.id,
+      userId: candidateId,
       name,
       location,
       image,
@@ -247,7 +369,7 @@ export async function findNearbyMatches(
       overall: compat.overall,
       compatibility: compat,
       distance: Math.round(distance),
-      archetype: doc.data().archetype ?? null,
+      archetype: completedSnap.docs.find((doc) => doc.id === candidateId)?.data()?.archetype ?? null,
     })
   }
 
