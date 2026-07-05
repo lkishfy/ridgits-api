@@ -11,7 +11,7 @@ import {
   formatMatchForClient,
   isVisibleInCommunity,
 } from '@/lib/matching/compatibility'
-import { normalizeQuizProgress } from '@/lib/matching/quiz-normalize'
+import { normalizeQuizProgress, syncQuizProgressForMatching } from '@/lib/matching/quiz-normalize'
 import { getVerifiedEmailMap } from '@/lib/trust-safety/email-verification'
 import { CLOSE_MATCHES_THRESHOLD_MILES } from '@/lib/ridgits-products'
 
@@ -100,7 +100,7 @@ export async function findNearbyMatches(
     throw new ApiError('Complete the quiz before matching.', 412)
   }
 
-  const userQuiz = normalizeQuizProgress(userQuizSnap.data() ?? {})
+  const userQuiz = await syncQuizProgressForMatching(uid, userQuizSnap.data() ?? {})
   if (!userQuiz.completed || Object.keys(userQuiz.answers).length === 0) {
     throw new ApiError('Complete the quiz before matching.', 412)
   }
