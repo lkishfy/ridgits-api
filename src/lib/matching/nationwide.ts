@@ -18,6 +18,7 @@ import { readStoredCoords } from '@/lib/matching/geocode-cache'
 import { sharedMetroArea } from '@/lib/location/metro-areas'
 import { normalizeQuizProgress, syncQuizProgressForMatching } from '@/lib/matching/quiz-normalize'
 import { effectiveSubscriptionTier } from '@/lib/subscription-badge'
+import { isProfilePhotoIdentityVerified } from '@/lib/trust-safety/profile-identity-match'
 
 export const NATIONWIDE_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 export const NATIONWIDE_CACHE_VERSION = 18
@@ -259,6 +260,7 @@ export async function computeTopNationwideMatchesInternal(uid: string) {
       archetype: candidate.archetype ?? null,
       subscriptionStatus: p.subscriptionStatus ?? otherUserProfile.subscriptionStatus ?? null,
       subscriptionTier: effectiveSubscriptionTier(otherProfile),
+      profilePhotoVerified: isProfilePhotoIdentityVerified(otherUserProfile, p),
       distance,
     })
   }

@@ -27,6 +27,8 @@ import {
   readStoredCoords,
   type Coords,
 } from '@/lib/matching/geocode-cache'
+import { isProfilePhotoIdentityVerified } from '@/lib/trust-safety/profile-identity-match'
+import { effectiveSubscriptionTier } from '@/lib/subscription-badge'
 import {
   isQuizCompleteForMatching,
   normalizeQuizProgress,
@@ -497,6 +499,8 @@ export async function findNearbyMatches(
       compatibility: compat,
       distance: Math.round(distance),
       archetype: completedSnap.docs.find((doc) => doc.id === candidateId)?.data()?.archetype ?? null,
+      subscriptionTier: effectiveSubscriptionTier(otherUser),
+      profilePhotoVerified: isProfilePhotoIdentityVerified(otherUser, p),
     })
   }
 

@@ -21,7 +21,7 @@ import {
 } from '@/lib/ridgits-products'
 import { hasActiveSubscriptionAccess } from '@/lib/ridgits-subscription'
 import { purgeLockedPackQuizData } from '@/lib/ridgits-pack-access'
-import { revokeSubscriptionBadge } from '@/lib/subscription-badge'
+import { revokeSubscriptionBadge, syncSubscriptionBadge } from '@/lib/subscription-badge'
 
 export interface LinkPurchaseInput {
   uid: string
@@ -91,12 +91,28 @@ export async function linkPurchase(input: LinkPurchaseInput): Promise<LinkPurcha
   const db = getDb()
   const userRef = db.collection('users').doc(input.uid)
 
-  return db.runTransaction(async (transaction) => {
+  const result = await db.runTransaction(async (transaction) => {
     const userSnap = await transaction.get(userRef)
     const isNewUser = !userSnap.exists
 
     const processed: string[] = isNewUser ? [] : (userSnap.get('processedTransactions') ?? [])
     if (processed.includes(transactionId)) {
+      if (membership) {
+        const staleTier = String(userSnap.get('subscriptionTier') ?? 'free')
+        const staleRank = TIER_RANK[staleTier] ?? 0
+        if (staleRank < TIER_RANK[membership.tier]) {
+          const expiration = subscriptionExpiration ?? null
+          transaction.set(
+            userRef,
+            {
+              ...membershipUpdateFields({ productId, membership, expiresIso: expiration }),
+              processedTransactions: FieldValue.arrayUnion(transactionId),
+            },
+            { merge: true },
+          )
+          return { linked: true, idempotent: false }
+        }
+      }
       return { linked: true, idempotent: true }
     }
 
@@ -183,6 +199,36 @@ export async function linkPurchase(input: LinkPurchaseInput): Promise<LinkPurcha
     transaction.set(userRef, update, { merge: true })
     return { linked: true, idempotent: false }
   })
+
+  if (membership && result.linked) {
+    await syncSubscriptionBadge({
+      uid: input.uid,
+      tier: membership.tier,
+      status: 'active',
+    })
+  }
+
+  return result
+}
+
+function membershipUpdateFields(input: {
+  productId: string
+  membership: { tier: 'plus' | 'premium' | 'ultra'; billing: 'monthly' | 'yearly' }
+  expiresIso: string | null
+}): Record<string, unknown> {
+  return {
+    isSubscribed: true,
+    subscriptionSource: 'app_store',
+    subscriptionTier: input.membership.tier,
+    subscriptionBillingPeriod: input.membership.billing,
+    subscriptionStatus: 'active',
+    subscriptionExpiresAt: input.expiresIso,
+    subscriptionExpiration: input.expiresIso,
+    subscriptionCurrentPeriodEnd: input.expiresIso,
+    subscriptionProductId: input.productId,
+    hasEverBeenSubscribed: true,
+    lastValidatedAt: FieldValue.serverTimestamp(),
+  }
 }
 
 export async function applyAppStoreNotification(input: {
@@ -219,6 +265,23 @@ export async function applyAppStoreNotification(input: {
 
   const activeTypes = new Set(['SUBSCRIBED', 'DID_RENEW', 'OFFER_REDEEMED'])
   const inactiveTypes = new Set(['EXPIRED', 'GRACE_PERIOD_EXPIRED', 'REFUND', 'REVOKE'])
+
+  if (notificationType === 'DID_CHANGE_RENEWAL_PREF' && membership) {
+    if (subtype === 'UPGRADE') {
+      await userRef.set(membershipUpdateFields({ productId, membership, expiresIso }), { merge: true })
+      await syncSubscriptionBadge({
+        uid: userRef.id,
+        tier: membership.tier,
+        status: 'active',
+      })
+      await purgeLockedPackQuizData(userRef.id)
+      return
+    }
+    if (subtype === 'DOWNGRADE') {
+      // Downgrade takes effect at renewal — keep current tier until expiration.
+      return
+    }
+  }
 
   if (notificationType === 'DID_CHANGE_RENEWAL_STATUS' && (isNearbyProduct || membership)) {
     if (subtype === 'AUTO_RENEW_DISABLED') {
@@ -273,22 +336,12 @@ export async function applyAppStoreNotification(input: {
   }
 
   if (activeTypes.has(notificationType) && membership) {
-    await userRef.set(
-      {
-        isSubscribed: true,
-        subscriptionSource: 'app_store',
-        subscriptionTier: membership.tier,
-        subscriptionBillingPeriod: membership.billing,
-        subscriptionStatus: 'active',
-        subscriptionExpiresAt: expiresIso,
-        subscriptionExpiration: expiresIso,
-        subscriptionCurrentPeriodEnd: expiresIso,
-        subscriptionProductId: productId,
-        hasEverBeenSubscribed: true,
-        lastValidatedAt: FieldValue.serverTimestamp(),
-      },
-      { merge: true },
-    )
+    await userRef.set(membershipUpdateFields({ productId, membership, expiresIso }), { merge: true })
+    await syncSubscriptionBadge({
+      uid: userRef.id,
+      tier: membership.tier,
+      status: 'active',
+    })
     await purgeLockedPackQuizData(userRef.id)
     return
   }

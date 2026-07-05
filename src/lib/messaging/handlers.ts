@@ -1,6 +1,7 @@
 import { FieldValue, Timestamp, type DocumentReference } from 'firebase-admin/firestore'
 import { ApiError } from '@/lib/api-errors'
 import { effectiveSubscriptionTier } from '@/lib/subscription-badge'
+import { isProfilePhotoIdentityVerified } from '@/lib/trust-safety/profile-identity-match'
 import { sendEngagementPush } from '@/lib/push-notifications'
 import { getDb } from '@/lib/firebase-admin'
 import {
@@ -207,6 +208,10 @@ function buildParticipantsMetadata(
   recipientPublic?: Record<string, unknown>,
 ) {
   const tier = (data: Record<string, unknown>) => effectiveSubscriptionTier(data)
+  const photoVerified = (
+    data: Record<string, unknown>,
+    publicData?: Record<string, unknown>,
+  ) => isProfilePhotoIdentityVerified(data, publicData)
 
   return {
     [senderId]: {
@@ -217,6 +222,7 @@ function buildParticipantsMetadata(
       lastSentAt: now,
       subscriptionStatus: senderData.subscriptionStatus ?? null,
       subscriptionTier: tier(senderData),
+      profilePhotoVerified: photoVerified(senderData, senderPublic),
     },
     [recipientId]: {
       displayName: getParticipantDisplayName(recipientData, recipientPublic),
@@ -226,6 +232,7 @@ function buildParticipantsMetadata(
       lastSentAt: null,
       subscriptionStatus: recipientData.subscriptionStatus ?? null,
       subscriptionTier: tier(recipientData),
+      profilePhotoVerified: photoVerified(recipientData, recipientPublic),
     },
   }
 }

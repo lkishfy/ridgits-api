@@ -111,6 +111,18 @@ export interface ProfileIdentityMatchResult {
   threshold: number
 }
 
+export function isProfilePhotoIdentityVerified(
+  userData?: Record<string, unknown> | null,
+  publicProfile?: Record<string, unknown> | null,
+): boolean {
+  if (publicProfile?.profilePhotoVerified === true) return true
+  return String(userData?.profilePhotoIdentityMatchStatus ?? '') === 'verified'
+}
+
+async function syncPublicProfilePhotoVerified(uid: string, verified: boolean): Promise<void> {
+  await getDb().collection('publicProfiles').doc(uid).set({ profilePhotoVerified: verified }, { merge: true })
+}
+
 export async function matchProfilePhotoToIdentity(uid: string): Promise<ProfileIdentityMatchResult> {
   const profileSnap = await getDb().collection('publicProfiles').doc(uid).get()
   const profileImage = String(profileSnap.get('image') ?? '').trim()
@@ -143,6 +155,8 @@ export async function matchProfilePhotoToIdentity(uid: string): Promise<ProfileI
     },
     { merge: true },
   )
+
+  await syncPublicProfilePhotoVerified(uid, match)
 
   if (match) {
     await claimProfilePhotoForUser(uid, photoHash)

@@ -130,6 +130,25 @@ export async function revokeSubscriptionBadge(input: {
   }
 }
 
+/** Keeps `publicProfiles` badge tier in sync with active membership on `users`. */
+export async function syncSubscriptionBadge(input: {
+  uid: string
+  tier: string
+  status?: string
+}): Promise<void> {
+  const tier = String(input.tier ?? 'free').trim().toLowerCase()
+  if (!isPaidTier(tier)) return
+
+  const db = getDb()
+  await db.collection('publicProfiles').doc(input.uid).set(
+    {
+      subscriptionTier: tier,
+      ...(input.status ? { subscriptionStatus: input.status } : {}),
+    },
+    { merge: true },
+  )
+}
+
 /** Clears stale paid tiers when Firestore still shows a badge but access is inactive. */
 export async function revokeSubscriptionBadgeIfInactive(uid: string): Promise<boolean> {
   const db = getDb()
