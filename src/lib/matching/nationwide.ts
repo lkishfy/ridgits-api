@@ -175,6 +175,10 @@ export async function computeTopNationwideMatchesInternal(uid: string) {
   const myInterestedIn = demoAnswer(userQuiz, 'demo_001', 1)
   const myIntent = toArrayOrEmpty(demoAnswer(userQuiz, 'demo_002', 2))
   const viewerDemographicsSet = viewerHasDemographics(myGender, myInterestedIn)
+  if (!viewerDemographicsSet) {
+    await db.collection('topNationwideMatches').doc(uid).delete().catch(() => undefined)
+    return []
+  }
 
   const ageRangeMin = userProfile.ageRangeMin ? parseInt(String(userProfile.ageRangeMin), 10) : null
   const ageRangeMax = userProfile.ageRangeMax ? parseInt(String(userProfile.ageRangeMax), 10) : null
