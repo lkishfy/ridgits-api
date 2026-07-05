@@ -43,7 +43,7 @@ export type NearbyMatchScanResult = {
 }
 
 function demoAnswer(quiz: ReturnType<typeof normalizeQuizProgress>, key: string, fallbackIndex: number) {
-  return readDemoAnswer(quiz.answers, key, fallbackIndex)
+  return readDemoAnswer(quiz.answers, key, fallbackIndex, quiz.preferredAnswers)
 }
 
 type Coords = { lat: number; lng: number }

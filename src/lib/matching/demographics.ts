@@ -34,9 +34,14 @@ export function readDemoAnswer(
   answers: Record<string, unknown> | undefined,
   key: string,
   fallbackIndex: number,
+  preferredAnswers?: Record<string, unknown>,
 ): unknown {
-  if (!answers) return undefined
-  return answers[key] ?? answers[String(fallbackIndex)]
+  if (!answers) answers = {}
+  let value = answers[key] ?? answers[String(fallbackIndex)]
+  if (value === undefined && preferredAnswers) {
+    value = preferredAnswers[key] ?? preferredAnswers[String(fallbackIndex)]
+  }
+  return value
 }
 
 export function hasSpecificGenderInterest(interestedIn: unknown): boolean {

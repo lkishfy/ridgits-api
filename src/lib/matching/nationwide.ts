@@ -18,7 +18,7 @@ import { effectiveSubscriptionTier } from '@/lib/subscription-badge'
 import { distanceMilesBetweenUsers } from '@/lib/matching/nearby'
 
 export const NATIONWIDE_CACHE_TTL_MS = 24 * 60 * 60 * 1000
-export const NATIONWIDE_CACHE_VERSION = 15
+export const NATIONWIDE_CACHE_VERSION = 16
 
 function cachedMatchesNeedRecompute(matches: Record<string, unknown>[]): boolean {
   if (matches.length === 0) return false
@@ -62,7 +62,7 @@ async function validateNationwideMatches(matches: Record<string, unknown>[]) {
 }
 
 function demoAnswer(quiz: ReturnType<typeof normalizeQuizProgress>, key: string, fallbackIndex: number) {
-  return readDemoAnswer(quiz.answers, key, fallbackIndex)
+  return readDemoAnswer(quiz.answers, key, fallbackIndex, quiz.preferredAnswers)
 }
 
 async function filterNationwideMatchesForViewer(
@@ -72,7 +72,7 @@ async function filterNationwideMatchesForViewer(
 ): Promise<Record<string, unknown>[]> {
   const myGender = demoAnswer(viewerQuiz, 'demo_000', 0)
   const myInterestedIn = demoAnswer(viewerQuiz, 'demo_001', 1)
-  if (!viewerHasDemographics(myGender, myInterestedIn)) return matches
+  if (!viewerHasDemographics(myGender, myInterestedIn)) return []
 
   const db = getDb()
   const filtered: Record<string, unknown>[] = []
@@ -159,6 +159,18 @@ export async function computeTopNationwideMatchesInternal(uid: string) {
   const myInterestedIn = demoAnswer(userQuiz, 'demo_001', 1)
   const myIntent = toArrayOrEmpty(demoAnswer(userQuiz, 'demo_002', 2))
   const viewerDemographicsSet = viewerHasDemographics(myGender, myInterestedIn)
+  if (!viewerDemographicsSet) {
+    await db.collection('topNationwideMatches').doc(uid).set(
+      {
+        matches: [],
+        updatedAt: FieldValue.serverTimestamp(),
+        userId: uid,
+        version: NATIONWIDE_CACHE_VERSION,
+      },
+      { merge: true },
+    )
+    return []
+  }
 
   const ageRangeMin = userProfile.ageRangeMin ? parseInt(String(userProfile.ageRangeMin), 10) : null
   const ageRangeMax = userProfile.ageRangeMax ? parseInt(String(userProfile.ageRangeMax), 10) : null
