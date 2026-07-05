@@ -11,7 +11,16 @@ import {
   formatMatchForClient,
   isVisibleInCommunity,
 } from '@/lib/matching/compatibility'
-import { normalizeQuizProgress, syncQuizProgressForMatching } from '@/lib/matching/quiz-normalize'
+import {
+  locationCacheKey,
+  readProfileLocationFields,
+  resolveProfileLocation,
+} from '@/lib/location/normalize'
+import {
+  isQuizCompleteForMatching,
+  normalizeQuizProgress,
+  syncQuizProgressForMatching,
+} from '@/lib/matching/quiz-normalize'
 import { getVerifiedEmailMap } from '@/lib/trust-safety/email-verification'
 import { CLOSE_MATCHES_THRESHOLD_MILES } from '@/lib/ridgits-products'
 
@@ -40,9 +49,14 @@ async function resolveCoords(
   profile: Record<string, unknown>,
   collection: 'users' | 'publicProfiles',
 ): Promise<Coords | null> {
+  const fields = readProfileLocationFields(profile)
+  const normalized = resolveProfileLocation(profile)
+  const cacheKey = locationCacheKey(profile)
+
   const cached = profile.coordinates as Coords | undefined
   const updatedAt = profile.coordinatesUpdatedAt
-  if (cached?.lat != null && cached?.lng != null && updatedAt) {
+  const geocodedFrom = String(profile.geocodedFromLocation ?? '').trim()
+  if (cached?.lat != null && cached?.lng != null && updatedAt && geocodedFrom === cacheKey) {
     const age =
       updatedAt instanceof Object && 'toMillis' in updatedAt
         ? Date.now() - (updatedAt as { toMillis: () => number }).toMillis()
@@ -50,18 +64,27 @@ async function resolveCoords(
     if (age < 30 * 24 * 60 * 60 * 1000) return cached
   }
 
-  const location = String(profile.location ?? '').trim()
-  if (!location) return null
+  if (!fields.location && !normalized) return null
 
-  const coords = await geocodeLocation(location)
+  const coords = await geocodeLocation(fields.location, {
+    city: fields.city,
+    stateCode: fields.stateCode,
+  })
   if (!coords) return null
 
   const db = getDb()
-  const payload = {
+  const payload: Record<string, unknown> = {
     coordinates: coords,
     coordinatesUpdatedAt: FieldValue.serverTimestamp(),
-    geocodedFromLocation: location,
+    geocodedFromLocation: cacheKey,
   }
+
+  if (normalized) {
+    payload.location = normalized.display
+    payload.locationCity = normalized.city
+    payload.locationStateCode = normalized.stateCode
+  }
+
   await db.collection(collection).doc(uid).set(payload, { merge: true })
   if (collection === 'users') {
     await db.collection('publicProfiles').doc(uid).set(payload, { merge: true })
@@ -96,16 +119,21 @@ export async function findNearbyMatches(
     db.collection('publicProfiles').doc(uid).get(),
   ])
 
-  if (!userQuizSnap.exists) {
-    throw new ApiError('Complete the quiz before matching.', 412)
-  }
-
-  const userQuiz = await syncQuizProgressForMatching(uid, userQuizSnap.data() ?? {})
-  if (!userQuiz.completed || Object.keys(userQuiz.answers).length === 0) {
-    throw new ApiError('Complete the quiz before matching.', 412)
-  }
-
   const userProfile = userProfileSnap.exists ? (userProfileSnap.data() ?? {}) : {}
+
+  if (!userQuizSnap.exists) {
+    if (isQuizCompleteForMatching({}, userProfile)) {
+      return { matches: [], closeMatchCount: 0 }
+    }
+    throw new ApiError('Complete the quiz before matching.', 412)
+  }
+
+  const rawQuiz = userQuizSnap.data() ?? {}
+  const userQuiz = await syncQuizProgressForMatching(uid, rawQuiz, userProfile)
+  if (!isQuizCompleteForMatching(rawQuiz, userProfile)) {
+    throw new ApiError('Complete the quiz before matching.', 412)
+  }
+
   const userPublic = userPublicSnap.exists ? (userPublicSnap.data() ?? {}) : {}
   const mergedProfile = { ...userProfile, ...userPublic }
 

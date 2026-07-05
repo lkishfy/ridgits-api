@@ -14,7 +14,7 @@ import { effectiveSubscriptionTier } from '@/lib/subscription-badge'
 import { distanceMilesBetweenUsers } from '@/lib/matching/nearby'
 
 export const NATIONWIDE_CACHE_TTL_MS = 24 * 60 * 60 * 1000
-export const NATIONWIDE_CACHE_VERSION = 13
+export const NATIONWIDE_CACHE_VERSION = 14
 
 function cachedMatchesNeedRecompute(matches: Record<string, unknown>[]): boolean {
   if (matches.length === 0) return false
@@ -103,8 +103,8 @@ export async function computeTopNationwideMatchesInternal(uid: string) {
     return []
   }
 
-  const userQuiz = await syncQuizProgressForMatching(uid, userQuizSnap.data() ?? {})
   const userProfile = userProfileSnap.exists ? (userProfileSnap.data() ?? {}) : {}
+  const userQuiz = await syncQuizProgressForMatching(uid, userQuizSnap.data() ?? {}, userProfile)
   const [userPublicSnap] = await Promise.all([
     getDb().collection('publicProfiles').doc(uid).get(),
   ])

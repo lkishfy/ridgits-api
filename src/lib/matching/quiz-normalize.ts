@@ -63,6 +63,39 @@ export function hasEnoughPersonalityAnswers(answers: Record<string, unknown>): b
   return personalityAnswerCount(answers) >= QUIZ_COMPLETION_ANSWER_THRESHOLD
 }
 
+function readStoredQuestionsAnswered(raw: Record<string, unknown>): number {
+  const value = raw.questionsAnswered
+  if (typeof value === 'number' && !Number.isNaN(value)) return value
+  if (typeof value === 'string') {
+    const parsed = parseInt(value, 10)
+    return Number.isNaN(parsed) ? 0 : parsed
+  }
+  return 0
+}
+
+function userProfileMarksQuizComplete(userProfile?: Record<string, unknown>): boolean {
+  if (!userProfile) return false
+  return userProfile.onboardingCompleted === true || userProfile.quizCompletedAt != null
+}
+
+/** Mirrors iOS `isQuizCompleted` / `ensureQuizCompletionRecorded` eligibility. */
+export function isQuizCompleteForMatching(
+  raw: Record<string, unknown>,
+  userProfile?: Record<string, unknown>,
+): boolean {
+  if (raw.completed === true) return true
+
+  const storedAnswered = readStoredQuestionsAnswered(raw)
+  if (storedAnswered >= QUIZ_COMPLETION_ANSWER_THRESHOLD) return true
+
+  if (userProfileMarksQuizComplete(userProfile)) return true
+
+  const normalized = normalizeQuizProgress(raw)
+  if (hasEnoughPersonalityAnswers(normalized.answers)) return true
+
+  return normalized.completed === true
+}
+
 /** Supports web flat maps and iOS nested `answers[id].{answer,preferredAnswers,...}`. */
 export function normalizeQuizProgress(raw: Record<string, unknown>): NormalizedQuizProgress {
   const answers: Record<string, unknown> = {}
@@ -127,31 +160,43 @@ export function normalizeQuizProgress(raw: Record<string, unknown>): NormalizedQ
 export async function syncQuizProgressForMatching(
   uid: string,
   raw: Record<string, unknown>,
+  userProfile?: Record<string, unknown>,
 ): Promise<NormalizedQuizProgress> {
   const normalized = normalizeQuizProgress(raw)
   const db = getDb()
 
+  const storedAnswered = readStoredQuestionsAnswered(raw)
+  const answerCount = personalityAnswerCount(normalized.answers)
   const shouldMarkComplete =
-    raw.completed === true || hasEnoughPersonalityAnswers(normalized.answers)
+    raw.completed === true ||
+    hasEnoughPersonalityAnswers(normalized.answers) ||
+    storedAnswered >= QUIZ_COMPLETION_ANSWER_THRESHOLD
+  const eligibleForMatching = shouldMarkComplete || userProfileMarksQuizComplete(userProfile)
   const keysNeedMigration = Object.keys((raw.answers as Record<string, unknown>) ?? {}).some(
     (key) => migrateQuestionKey(key) !== key,
   )
+  const hasAnswerPayload = answerCount > 0
 
-  if (shouldMarkComplete && (raw.completed !== true || keysNeedMigration)) {
-    await db.collection('quizProgress').doc(uid).set(
-      {
-        answers: normalized.answers,
-        preferredAnswers: normalized.preferredAnswers,
-        importance: normalized.importance,
-        dealbreakers: normalized.dealbreakers,
-        completed: true,
-        completedAt: FieldValue.serverTimestamp(),
-        questionsAnswered: personalityAnswerCount(normalized.answers),
-      },
-      { merge: true },
-    )
+  const needsCompletionPatch = shouldMarkComplete && raw.completed !== true
+  const needsMigrationPatch = keysNeedMigration && hasAnswerPayload
+
+  if (needsCompletionPatch || needsMigrationPatch) {
+    const payload: Record<string, unknown> = {
+      completed: true,
+      completedAt: FieldValue.serverTimestamp(),
+      questionsAnswered: Math.max(answerCount, storedAnswered),
+    }
+
+    if (needsMigrationPatch) {
+      payload.answers = normalized.answers
+      payload.preferredAnswers = normalized.preferredAnswers
+      payload.importance = normalized.importance
+      payload.dealbreakers = normalized.dealbreakers
+    }
+
+    await db.collection('quizProgress').doc(uid).set(payload, { merge: true })
     await db.collection('topNationwideMatches').doc(uid).delete().catch(() => undefined)
   }
 
-  return { ...normalized, completed: shouldMarkComplete }
+  return { ...normalized, completed: eligibleForMatching }
 }

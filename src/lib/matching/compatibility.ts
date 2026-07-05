@@ -195,11 +195,17 @@ export function haversineMiles(
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
-export async function geocodeLocation(locationString: string): Promise<{ lat: number; lng: number } | null> {
-  if (!locationString.trim()) return null
+import {
+  normalizeUSLocation,
+  resolveProfileLocation,
+  type NormalizedUSLocation,
+} from '@/lib/location/normalize'
+
+async function geocodeQuery(query: string): Promise<{ lat: number; lng: number } | null> {
+  if (!query.trim()) return null
   try {
     const response = await fetch(
-      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(locationString)}&limit=1`,
+      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1`,
       { headers: { 'User-Agent': 'Ridgits API' } },
     )
     if (!response.ok) return null
@@ -210,6 +216,28 @@ export async function geocodeLocation(locationString: string): Promise<{ lat: nu
     return null
   }
 }
+
+export async function geocodeLocation(
+  locationString: string,
+  structured?: { city?: string | null; stateCode?: string | null },
+): Promise<{ lat: number; lng: number } | null> {
+  const normalized = normalizeUSLocation(locationString, structured)
+  if (normalized) {
+    const precise = await geocodeQuery(normalized.geocodeQuery)
+    if (precise) return precise
+  }
+
+  const trimmed = locationString.trim()
+  if (!trimmed) return null
+
+  const withCountry = trimmed.toLowerCase().includes('united states')
+    ? trimmed
+    : `${trimmed}, United States`
+  return geocodeQuery(withCountry)
+}
+
+export type { NormalizedUSLocation }
+export { normalizeUSLocation, resolveProfileLocation }
 
 export function isVisibleInCommunity(profile: Record<string, unknown> | null | undefined): boolean {
   return profile?.visibleInCommunity !== false
