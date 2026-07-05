@@ -4,6 +4,11 @@ import { ApiError } from '@/lib/api-errors'
 import { getDb } from '@/lib/firebase-admin'
 import { getStripe, isStripeConfigured } from '@/lib/stripe-client'
 import { hasActiveSubscriptionAccess } from '@/lib/ridgits-subscription'
+import {
+  assertIdentityDocumentNotAlreadyClaimed,
+  claimIdentityDocumentForUser,
+  resolveIdentityDocumentFingerprint,
+} from '@/lib/trust-safety/identity-document-safety'
 import { matchProfilePhotoToIdentity } from '@/lib/trust-safety/profile-identity-match'
 import {
   assertPhoneNotAlreadyClaimed,
@@ -103,6 +108,41 @@ async function findVerifiedSessionForUid(
   return null
 }
 
+async function retrieveSessionWithDetails(
+  stripe: Stripe,
+  sessionId: string,
+): Promise<Stripe.Identity.VerificationSession> {
+  return stripe.identity.verificationSessions.retrieve(sessionId, {
+    expand: ['verified_outputs', 'last_verification_report'],
+  })
+}
+
+/** Phone may live on verified_outputs, the verification report, or provided_details. */
+async function resolveVerifiedPhone(
+  stripe: Stripe,
+  session: Stripe.Identity.VerificationSession,
+): Promise<string | null> {
+  const fromOutputs = session.verified_outputs?.phone?.trim()
+  if (fromOutputs) return fromOutputs
+
+  let report = session.last_verification_report
+  if (typeof report === 'string' && report.trim()) {
+    report = await stripe.identity.verificationReports.retrieve(report.trim())
+  }
+  if (report && typeof report === 'object' && 'phone' in report) {
+    const reportPhone = (report as Stripe.Identity.VerificationReport).phone
+    if (reportPhone?.status === 'verified') {
+      const normalized = reportPhone.phone?.trim()
+      if (normalized) return normalized
+    }
+  }
+
+  const provided = session.provided_details?.phone?.trim()
+  if (provided && session.status === 'verified') return provided
+
+  return null
+}
+
 async function syncIdentityStatusFromStripeIfNeeded(
   uid: string,
   data: Record<string, unknown>,
@@ -127,18 +167,20 @@ async function syncIdentityStatusFromStripeIfNeeded(
   try {
     const verifiedSession = await findVerifiedSessionForUid(stripe, uid)
     if (verifiedSession) {
-      await applyVerificationSessionUpdate(verifiedSession)
+      const fullSession = await retrieveSessionWithDetails(stripe, verifiedSession.id)
+      await applyVerificationSessionUpdate(fullSession)
       const refreshed = await getDb().collection('users').doc(uid).get()
-      return refreshed.data() ?? bestData
+      bestData = refreshed.data() ?? bestData
+      if (isFullyVerified(bestData)) return bestData
     }
   } catch (error) {
     console.error('[stripe-identity] find verified session failed', uid, error)
   }
 
   const sessionId = String(data.stripeVerificationSessionId ?? '').trim()
-  if (sessionId && data.identityVerificationStatus !== 'verified') {
+  if (sessionId && (data.identityVerificationStatus !== 'verified' || data.phoneVerificationStatus !== 'verified')) {
     try {
-      const session = await stripe.identity.verificationSessions.retrieve(sessionId)
+      const session = await retrieveSessionWithDetails(stripe, sessionId)
       if (session.status === 'verified') {
         await applyVerificationSessionUpdate(session)
         const refreshed = await getDb().collection('users').doc(uid).get()
@@ -267,10 +309,15 @@ export async function createIdentityVerificationSession(
 
   if (existingSessionId) {
     try {
-      const existing = await stripe.identity.verificationSessions.retrieve(existingSessionId)
+      const existing = await retrieveSessionWithDetails(stripe, existingSessionId)
       if (existing.status === 'verified') {
         await applyVerificationSessionUpdate(existing)
-        throw new ApiError('Identity verification is already complete.', 400, 'IDENTITY_ALREADY_VERIFIED')
+        const after = await getIdentityStatus(uid)
+        const phoneOk =
+          !identityRequiresPhoneVerification() || after.phoneVerificationStatus === 'verified'
+        if (phoneOk) {
+          throw new ApiError('Identity verification is already complete.', 400, 'IDENTITY_ALREADY_VERIFIED')
+        }
       }
       if (['requires_input', 'processing'].includes(existing.status) && existing.url) {
         return { url: existing.url, sessionId: existing.id }
@@ -360,28 +407,47 @@ export async function applyVerificationSessionUpdate(session: Stripe.Identity.Ve
   }
 
   if (session.status === 'verified') {
-    update.identityVerifiedAt = FieldValue.serverTimestamp()
+    const stripe = getStripe()
+    let allowVerified = true
 
-    const dob = session.verified_outputs?.dob
-    if (dob?.year) {
-      update.identityVerifiedBirthYear = dob.year
+    const documentHash = await resolveIdentityDocumentFingerprint(stripe, session)
+    if (documentHash) {
+      try {
+        await assertIdentityDocumentNotAlreadyClaimed(documentHash, uid)
+      } catch (error) {
+        console.error('[stripe-identity] duplicate government ID blocked', uid, error)
+        allowVerified = false
+        update.identityVerificationStatus = 'failed'
+        update.trustSafetyFlags = FieldValue.arrayUnion('duplicate_identity_document')
+      }
     }
 
-    const verifiedPhone = session.verified_outputs?.phone?.trim()
-    if (identityRequiresPhoneVerification()) {
-      if (verifiedPhone) {
-        try {
-          const e164 = normalizeE164Phone(verifiedPhone)
-          await assertPhoneNotAlreadyClaimed(e164, uid)
-          await claimPhoneForUser(uid, e164)
-          update.phoneVerificationStatus = 'verified'
-          update.phoneVerifiedAt = FieldValue.serverTimestamp()
-        } catch (error) {
-          console.error('[stripe-identity] phone claim failed after verification', uid, error)
-          update.phoneVerificationStatus = 'failed'
+    if (allowVerified) {
+      update.identityVerifiedAt = FieldValue.serverTimestamp()
+
+      const dob = session.verified_outputs?.dob
+      if (dob?.year) {
+        update.identityVerifiedBirthYear = dob.year
+      }
+
+      if (documentHash) {
+        await claimIdentityDocumentForUser(uid, documentHash)
+      }
+
+      if (identityRequiresPhoneVerification()) {
+        const verifiedPhone = await resolveVerifiedPhone(stripe, session)
+        if (verifiedPhone) {
+          try {
+            const e164 = normalizeE164Phone(verifiedPhone)
+            await assertPhoneNotAlreadyClaimed(e164, uid)
+            await claimPhoneForUser(uid, e164)
+            update.phoneVerificationStatus = 'verified'
+            update.phoneVerifiedAt = FieldValue.serverTimestamp()
+          } catch (error) {
+            console.error('[stripe-identity] phone claim failed after verification', uid, error)
+            update.phoneVerificationStatus = 'failed'
+          }
         }
-      } else {
-        update.phoneVerificationStatus = 'failed'
       }
     }
   }

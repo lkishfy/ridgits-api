@@ -1,4 +1,5 @@
 import { FieldValue } from 'firebase-admin/firestore'
+import { ApiError } from '@/lib/api-errors'
 import { getDb } from '@/lib/firebase-admin'
 import {
   decodeAppleJwsPayload,
@@ -18,6 +19,7 @@ import {
   SUPPORTED_IAP_PRODUCT_IDS,
   TIER_RANK,
 } from '@/lib/ridgits-products'
+import { hasActiveSubscriptionAccess } from '@/lib/ridgits-subscription'
 import { purgeLockedPackQuizData } from '@/lib/ridgits-pack-access'
 import { revokeSubscriptionBadge } from '@/lib/subscription-badge'
 
@@ -167,6 +169,13 @@ export async function linkPurchase(input: LinkPurchaseInput): Promise<LinkPurcha
     }
 
     if (pokeCredits) {
+      if (!hasActiveSubscriptionAccess(userSnap.data())) {
+        throw new ApiError(
+          'A Ridgits+ subscription is required to purchase poke packs.',
+          402,
+          'SUBSCRIPTION_REQUIRED',
+        )
+      }
       update.pokeCreditBalance = FieldValue.increment(pokeCredits)
       update.lastPokePackPurchaseAt = FieldValue.serverTimestamp()
     }

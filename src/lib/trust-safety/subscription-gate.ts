@@ -3,7 +3,7 @@ import { getNearbyAccess } from '@/lib/ridgits-subscription'
 
 /**
  * Messaging requires an active paid subscription (Ridgits+, Premium, or Ultra).
- * Pokes use consumable poke credits (IAP), not subscription.
+ * Poke packs (consumable IAP) also require an active subscription before purchase.
  */
 export async function requireActiveSubscription(uid: string, email?: string | null): Promise<void> {
   const access = await getNearbyAccess(uid, email)

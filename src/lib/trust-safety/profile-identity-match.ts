@@ -2,7 +2,7 @@ import { FieldValue } from 'firebase-admin/firestore'
 import { ApiError } from '@/lib/api-errors'
 import { getDb } from '@/lib/firebase-admin'
 import { getStripe, isStripeConfigured } from '@/lib/stripe-client'
-import { validateProfilePhotoUrl } from '@/lib/trust-safety/profile-photo'
+import { validateProfilePhotoUrl, hashProfilePhotoFromUrl, assertProfilePhotoNotAlreadyClaimed, claimProfilePhotoForUser } from '@/lib/trust-safety/profile-photo'
 
 const DEFAULT_MATCH_THRESHOLD = 0.9
 
@@ -120,6 +120,9 @@ export async function matchProfilePhotoToIdentity(uid: string): Promise<ProfileI
     throw new ApiError(photoCheck.reason ?? 'A valid profile photo is required.', 412, 'INVALID_PROFILE_PHOTO')
   }
 
+  const photoHash = await hashProfilePhotoFromUrl(profileImage)
+  await assertProfilePhotoNotAlreadyClaimed(photoHash, uid)
+
   await getDb().collection('users').doc(uid).set(
     { profilePhotoIdentityMatchStatus: 'pending' },
     { merge: true },
@@ -140,6 +143,10 @@ export async function matchProfilePhotoToIdentity(uid: string): Promise<ProfileI
     },
     { merge: true },
   )
+
+  if (match) {
+    await claimProfilePhotoForUser(uid, photoHash)
+  }
 
   return { status, score, threshold }
 }

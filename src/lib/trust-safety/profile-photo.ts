@@ -1,4 +1,10 @@
+import { createHash } from 'node:crypto'
+import { FieldValue } from 'firebase-admin/firestore'
 import { ApiError } from '@/lib/api-errors'
+import { getDb } from '@/lib/firebase-admin'
+
+const PROFILE_PHOTO_HASH_SALT =
+  process.env.RIDGITS_PROFILE_PHOTO_HASH_SALT ?? 'ridgits-profile-photo-salt-v1'
 
 export interface PhotoValidationResult {
   ok: boolean
@@ -53,6 +59,55 @@ export async function requireValidProfilePhoto(url: string | null | undefined): 
   if (!result.ok) {
     throw new ApiError(result.reason ?? 'A valid profile photo is required.', 412, 'INVALID_PROFILE_PHOTO')
   }
+}
+
+export async function hashProfilePhotoFromUrl(url: string): Promise<string> {
+  const trimmed = url.trim()
+  const response = await fetch(trimmed, { signal: AbortSignal.timeout(12000) })
+  if (!response.ok) {
+    throw new ApiError('Profile photo could not be downloaded for verification.', 412, 'INVALID_PROFILE_PHOTO')
+  }
+  const contentType = response.headers.get('content-type') ?? ''
+  if (contentType && !contentType.startsWith('image/')) {
+    throw new ApiError('Profile photo URL does not point to an image.', 412, 'INVALID_PROFILE_PHOTO')
+  }
+  const bytes = Buffer.from(await response.arrayBuffer())
+  return createHash('sha256').update(`${PROFILE_PHOTO_HASH_SALT}:${bytes}`).digest('hex')
+}
+
+export async function findExistingProfilePhotoOwner(photoHash: string): Promise<string | null> {
+  const snap = await getDb().collection('profilePhotoHashes').doc(photoHash).get()
+  if (!snap.exists) return null
+  const uid = snap.data()?.uid
+  return typeof uid === 'string' ? uid : null
+}
+
+export async function assertProfilePhotoNotAlreadyClaimed(photoHash: string, uid: string): Promise<void> {
+  const existing = await findExistingProfilePhotoOwner(photoHash)
+  if (existing && existing !== uid) {
+    throw new ApiError(
+      'This profile photo is already linked to another Ridgits account.',
+      409,
+      'PROFILE_PHOTO_ALREADY_CLAIMED',
+    )
+  }
+}
+
+export async function claimProfilePhotoForUser(uid: string, photoHash: string): Promise<void> {
+  const db = getDb()
+  await db.collection('profilePhotoHashes').doc(photoHash).set(
+    { uid, claimedAt: FieldValue.serverTimestamp() },
+    { merge: true },
+  )
+  await db.collection('users').doc(uid).set({ profilePhotoHash: photoHash }, { merge: true })
+}
+
+/** Validates URL, hashes image bytes, and claims the photo for this user. */
+export async function registerProfilePhotoForUser(uid: string, imageUrl: string): Promise<void> {
+  await requireValidProfilePhoto(imageUrl)
+  const photoHash = await hashProfilePhotoFromUrl(imageUrl)
+  await assertProfilePhotoNotAlreadyClaimed(photoHash, uid)
+  await claimProfilePhotoForUser(uid, photoHash)
 }
 
 export interface ModerationResult {
