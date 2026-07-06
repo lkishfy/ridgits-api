@@ -19,10 +19,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const result = await approveConversation(auth.uid, body.conversationId.trim(), {
-      emailVerified: auth.emailVerified,
-      email: auth.email,
-    })
+    const result = await approveConversation(auth.uid, body.conversationId.trim())
     return NextResponse.json(result)
   } catch (error) {
     const { message, status, code, retryAfterSeconds } = apiErrorResponse(error)

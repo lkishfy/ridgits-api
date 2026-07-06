@@ -25,6 +25,11 @@ export function computeAgeFromDateOfBirth(
   return age
 }
 
+export function clampMatchAgeRangeMin(raw: number | null): number | null {
+  if (raw === null || Number.isNaN(raw)) return null
+  return Math.max(MINIMUM_MATCH_AGE_YEARS, raw)
+}
+
 export function isValidBirthYear(birthYear: unknown): birthYear is number {
   if (typeof birthYear !== 'number' || !Number.isInteger(birthYear)) return false
   const currentYear = new Date().getFullYear()

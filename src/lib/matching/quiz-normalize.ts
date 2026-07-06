@@ -1,4 +1,4 @@
-import { FieldValue } from 'firebase-admin/firestore'
+import { FieldValue, type QueryDocumentSnapshot } from 'firebase-admin/firestore'
 import { getDb } from '@/lib/firebase-admin'
 import { questionIdForIndex } from '@/lib/matching/quiz-question-ids'
 
@@ -46,7 +46,8 @@ function isDemographicQuestionKey(key: string): boolean {
   return !Number.isNaN(num) && num < 3
 }
 
-export const QUIZ_COMPLETION_ANSWER_THRESHOLD = 50
+/** Personality answers required to unlock matching (mirrors iOS `minimumAnswersToComplete`). */
+export const QUIZ_COMPLETION_ANSWER_THRESHOLD = 53
 
 export function personalityAnswerCount(answers: Record<string, unknown>): number {
   return Object.keys(answers).filter((key) => {
@@ -83,7 +84,7 @@ export function isQuizCompleteForMatching(
   raw: Record<string, unknown>,
   userProfile?: Record<string, unknown>,
 ): boolean {
-  if (raw.completed === true) return true
+  if (raw.eligibleForMatching === true) return true
 
   const storedAnswered = readStoredQuestionsAnswered(raw)
   if (storedAnswered >= QUIZ_COMPLETION_ANSWER_THRESHOLD) return true
@@ -93,7 +94,28 @@ export function isQuizCompleteForMatching(
   const normalized = normalizeQuizProgress(raw)
   if (hasEnoughPersonalityAnswers(normalized.answers)) return true
 
+  if (raw.completed === true) {
+    return (
+      storedAnswered >= QUIZ_COMPLETION_ANSWER_THRESHOLD ||
+      hasEnoughPersonalityAnswers(normalized.answers)
+    )
+  }
+
   return normalized.completed === true
+}
+
+/** Quiz progress docs that may appear in matching candidate pools. */
+export async function getMatchingEligibleQuizDocs(): Promise<QueryDocumentSnapshot[]> {
+  const db = getDb()
+  const [eligibleSnap, completedSnap] = await Promise.all([
+    db.collection('quizProgress').where('eligibleForMatching', '==', true).get(),
+    db.collection('quizProgress').where('completed', '==', true).get(),
+  ])
+
+  const byId = new Map<string, QueryDocumentSnapshot>()
+  for (const doc of eligibleSnap.docs) byId.set(doc.id, doc)
+  for (const doc of completedSnap.docs) byId.set(doc.id, doc)
+  return [...byId.values()]
 }
 
 /** Supports web flat maps and iOS nested `answers[id].{answer,preferredAnswers,...}`. */
@@ -178,13 +200,18 @@ export async function syncQuizProgressForMatching(
   const hasAnswerPayload = answerCount > 0
 
   const needsCompletionPatch = shouldMarkComplete && raw.completed !== true
+  const needsEligibilityPatch = eligibleForMatching && raw.eligibleForMatching !== true
   const needsMigrationPatch = keysNeedMigration && hasAnswerPayload
 
-  if (needsCompletionPatch || needsMigrationPatch) {
+  if (needsCompletionPatch || needsEligibilityPatch || needsMigrationPatch) {
     const payload: Record<string, unknown> = {
-      completed: true,
-      completedAt: FieldValue.serverTimestamp(),
-      questionsAnswered: Math.max(answerCount, storedAnswered),
+      eligibleForMatching: true,
+      questionsAnswered: Math.max(answerCount, storedAnswered, QUIZ_COMPLETION_ANSWER_THRESHOLD),
+    }
+
+    if (shouldMarkComplete) {
+      payload.completed = true
+      payload.completedAt = FieldValue.serverTimestamp()
     }
 
     if (needsMigrationPatch) {

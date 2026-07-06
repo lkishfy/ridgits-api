@@ -17,9 +17,10 @@ import {
 import { readStoredCoords } from '@/lib/matching/geocode-cache'
 import { sharedMetroArea } from '@/lib/location/metro-areas'
 import { isProfileInUnitedStates } from '@/lib/location/normalize'
-import { normalizeQuizProgress, syncQuizProgressForMatching } from '@/lib/matching/quiz-normalize'
+import { normalizeQuizProgress, syncQuizProgressForMatching, getMatchingEligibleQuizDocs, isQuizCompleteForMatching } from '@/lib/matching/quiz-normalize'
 import { effectiveSubscriptionTier } from '@/lib/subscription-badge'
 import { isProfilePhotoIdentityVerified } from '@/lib/trust-safety/profile-identity-match'
+import { clampMatchAgeRangeMin } from '@/lib/trust-safety/age'
 
 export const NATIONWIDE_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 export const NATIONWIDE_CACHE_VERSION = 20
@@ -197,7 +198,9 @@ export async function computeTopNationwideMatchesInternal(uid: string) {
     return []
   }
 
-  const ageRangeMin = userProfile.ageRangeMin ? parseInt(String(userProfile.ageRangeMin), 10) : null
+  const ageRangeMin = clampMatchAgeRangeMin(
+    userProfile.ageRangeMin ? parseInt(String(userProfile.ageRangeMin), 10) : null,
+  )
   const ageRangeMax = userProfile.ageRangeMax ? parseInt(String(userProfile.ageRangeMax), 10) : null
   const hasAgeRange =
     ageRangeMin !== null &&
@@ -205,12 +208,13 @@ export async function computeTopNationwideMatchesInternal(uid: string) {
     !Number.isNaN(ageRangeMin) &&
     !Number.isNaN(ageRangeMax)
 
-  const completedSnap = await db.collection('quizProgress').where('completed', '==', true).get()
+  const matchingQuizDocs = await getMatchingEligibleQuizDocs()
   const scored: Array<{ userId: string; overall: number; archetype: unknown; compat: ReturnType<typeof calculateCompatibility> }> = []
 
-  for (const doc of completedSnap.docs) {
+  for (const doc of matchingQuizDocs) {
     if (doc.id === uid) continue
-    const otherRaw = doc.data()
+    const otherRaw = doc.data() ?? {}
+    if (!isQuizCompleteForMatching(otherRaw)) continue
     const other = normalizeQuizProgress(otherRaw)
 
     if (viewerDemographicsSet) {

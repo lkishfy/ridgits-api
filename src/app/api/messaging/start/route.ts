@@ -34,10 +34,7 @@ export async function POST(request: NextRequest) {
       windowSeconds: 60 * 60,
     })
 
-    const result = await startConversation(auth.uid, body.toUserId.trim(), body.message ?? '', {
-      emailVerified: auth.emailVerified,
-      email: auth.email,
-    })
+    const result = await startConversation(auth.uid, body.toUserId.trim(), body.message ?? '')
     return NextResponse.json(result)
   } catch (error) {
     const { message, status, code, retryAfterSeconds } = apiErrorResponse(error)

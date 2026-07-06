@@ -32,7 +32,7 @@ async function backfillOne(
   if (!quizSnap.exists) return 'skipped'
 
   const raw = quizSnap.data() ?? {}
-  if (raw.completed === true) return 'skipped'
+  if (raw.completed === true && raw.eligibleForMatching === true) return 'skipped'
 
   const userProfile = userSnap.exists ? (userSnap.data() ?? {}) : {}
   if (!isQuizCompleteForMatching(raw, userProfile)) return 'skipped'
@@ -59,7 +59,12 @@ export async function backfillQuizCompletion(
     uids = [options.uid]
   } else {
     const snap = await db.collection('quizProgress').get()
-    uids = snap.docs.filter((doc) => doc.data()?.completed !== true).map((doc) => doc.id)
+    uids = snap.docs
+      .filter((doc) => {
+        const data = doc.data() ?? {}
+        return data.completed !== true || data.eligibleForMatching !== true
+      })
+      .map((doc) => doc.id)
   }
 
   const candidates: string[] = []
@@ -67,7 +72,7 @@ export async function backfillQuizCompletion(
     const quizSnap = await db.collection('quizProgress').doc(uid).get()
     if (!quizSnap.exists) continue
     const raw = quizSnap.data() ?? {}
-    if (raw.completed === true) continue
+    if (raw.completed === true && raw.eligibleForMatching === true) continue
 
     const userSnap = await db.collection('users').doc(uid).get()
     const userProfile = userSnap.exists ? (userSnap.data() ?? {}) : {}

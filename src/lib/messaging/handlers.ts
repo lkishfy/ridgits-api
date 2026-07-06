@@ -56,20 +56,7 @@ async function ensureUserExists(uid: string) {
   return snap.exists ? snap : null
 }
 
-interface MessagingActor {
-  emailVerified: boolean
-  email?: string | null
-}
-
-async function ensureMessagingAllowed(uid: string, actor: MessagingActor) {
-  if (!actor.emailVerified) {
-    throw new ApiError(
-      'Please verify your email address before messaging. Check your inbox for the verification link, or resend it from Settings.',
-      403,
-      'EMAIL_NOT_VERIFIED',
-    )
-  }
-
+async function ensureMessagingAllowed(uid: string) {
   const userSnap = await ensureUserExists(uid)
   if (!userSnap) throw new ApiError('You must complete your profile before messaging.', 412, 'USER_NOT_FOUND')
 
@@ -112,7 +99,8 @@ async function ensureMessagingAllowed(uid: string, actor: MessagingActor) {
 
   await requireIdentityVerified(uid)
 
-  await requireActiveSubscription(uid, actor.email)
+  const userEmail = String(userSnap.data()?.email ?? '').trim() || null
+  await requireActiveSubscription(uid, userEmail)
 
   const data = userSnap.data() ?? {}
   if (data.messagingSuspended) {
@@ -237,7 +225,7 @@ function buildParticipantsMetadata(
   }
 }
 
-export async function startConversation(senderId: string, toUserId: string, message: string, actor: MessagingActor) {
+export async function startConversation(senderId: string, toUserId: string, message: string) {
   if (toUserId === senderId) throw new ApiError('You cannot message yourself.', 400)
 
   const normalizedMessage = normalizeMessage(message)
@@ -251,7 +239,7 @@ export async function startConversation(senderId: string, toUserId: string, mess
     { recipientId: toUserId },
   )
 
-  const { data: senderData } = await ensureMessagingAllowed(senderId, actor)
+  const { data: senderData } = await ensureMessagingAllowed(senderId)
   requireAccountCooldownElapsed(senderData)
   const recipientSnap = await ensureUserExists(toUserId)
   if (!recipientSnap) throw new ApiError('Recipient not found.', 404)
@@ -368,8 +356,8 @@ export async function startConversation(senderId: string, toUserId: string, mess
   return { conversationId }
 }
 
-export async function approveConversation(userId: string, conversationId: string, actor: MessagingActor) {
-  await ensureMessagingAllowed(userId, actor)
+export async function approveConversation(userId: string, conversationId: string) {
+  await ensureMessagingAllowed(userId)
   const db = getDb()
   const conversationRef = db.collection('conversations').doc(conversationId)
 
@@ -440,7 +428,7 @@ export async function approveConversation(userId: string, conversationId: string
   return { conversationId, status: 'active' }
 }
 
-export async function sendMessage(senderId: string, conversationId: string, message: string, actor: MessagingActor) {
+export async function sendMessage(senderId: string, conversationId: string, message: string) {
   const normalizedMessage = normalizeMessage(message)
   if (!normalizedMessage) throw new ApiError('Message cannot be empty.', 400)
   if (normalizedMessage.length > MAX_MESSAGE_LENGTH) throw new ApiError('Message is too long.', 400)
@@ -459,7 +447,7 @@ export async function sendMessage(senderId: string, conversationId: string, mess
     { conversationId, recipientId: preRecipientId },
   )
 
-  const { data: senderData } = await ensureMessagingAllowed(senderId, actor)
+  const { data: senderData } = await ensureMessagingAllowed(senderId)
   const senderPublicSnap = await db.collection('publicProfiles').doc(senderId).get()
   const senderPublic = senderPublicSnap.data()
 

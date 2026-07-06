@@ -34,10 +34,7 @@ export async function POST(request: NextRequest) {
       windowSeconds: 60 * 60,
     })
 
-    const result = await sendPoke(auth.uid, body.toUserId.trim(), {
-      emailVerified: auth.emailVerified,
-      email: auth.email,
-    })
+    const result = await sendPoke(auth.uid, body.toUserId.trim())
     return NextResponse.json(result)
   } catch (error) {
     const { message, status, code, retryAfterSeconds } = apiErrorResponse(error)

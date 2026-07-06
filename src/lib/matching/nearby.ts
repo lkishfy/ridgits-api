@@ -33,9 +33,10 @@ import {
   isQuizCompleteForMatching,
   normalizeQuizProgress,
   syncQuizProgressForMatching,
+  getMatchingEligibleQuizDocs,
 } from '@/lib/matching/quiz-normalize'
-import { getVerifiedEmailMap } from '@/lib/trust-safety/email-verification'
 import { CLOSE_MATCHES_THRESHOLD_MILES } from '@/lib/ridgits-products'
+import { clampMatchAgeRangeMin } from '@/lib/trust-safety/age'
 
 export type NearbyMatchScanOptions = {
   closeCountOnly?: boolean
@@ -222,15 +223,12 @@ async function loadProfileMaps(
 }
 
 function passesProfileFilters(
-  candidateId: string,
   publicProfile: Record<string, unknown>,
   privateProfile: Record<string, unknown>,
-  verifiedEmailMap: Map<string, boolean>,
   hasAgeRange: boolean,
   ageRangeMin: number | null,
   ageRangeMax: number | null,
 ): boolean {
-  if (verifiedEmailMap.get(candidateId) !== true) return false
   if (!isVisibleInCommunity(publicProfile) || !isVisibleInCommunity(privateProfile)) return false
 
   const name = String(publicProfile.name ?? '').trim()
@@ -261,7 +259,6 @@ async function discoverProximityUserIds(
   if (scored.length === 0) return []
 
   const allIds = scored.map((entry) => entry.userId)
-  const verifiedEmailMap = await getVerifiedEmailMap(allIds)
   const { profileById, userById } = await loadProfileMaps(allIds)
 
   const userIds: string[] = []
@@ -271,10 +268,8 @@ async function discoverProximityUserIds(
     if (!publicProfile || !privateProfile) continue
     if (
       !passesProfileFilters(
-        userId,
         publicProfile,
         privateProfile,
-        verifiedEmailMap,
         hasAgeRange,
         ageRangeMin,
         ageRangeMax,
@@ -306,7 +301,6 @@ async function computeCloseMatchesForCandidates(
 ): Promise<CloseMatchScanResult> {
   if (candidateIds.length === 0) return { count: 0, previews: [], userIds: [] }
 
-  const verifiedEmailMap = await getVerifiedEmailMap(candidateIds)
   const { profileById, userById } = await loadProfileMaps(candidateIds)
 
   let count = 0
@@ -319,10 +313,8 @@ async function computeCloseMatchesForCandidates(
     if (!publicProfile || !privateProfile) continue
     if (
       !passesProfileFilters(
-        userId,
         publicProfile,
         privateProfile,
-        verifiedEmailMap,
         hasAgeRange,
         ageRangeMin,
         ageRangeMax,
@@ -423,7 +415,9 @@ export async function findNearbyMatches(
   const myIntent = toArrayOrEmpty(demoAnswer(userQuiz, 'demo_002', 2))
   const viewerDemographicsSet = viewerHasDemographics(myGender, myInterestedIn)
 
-  const ageRangeMin = userProfile.ageRangeMin ? parseInt(String(userProfile.ageRangeMin), 10) : null
+  const ageRangeMin = clampMatchAgeRangeMin(
+    userProfile.ageRangeMin ? parseInt(String(userProfile.ageRangeMin), 10) : null,
+  )
   const ageRangeMax = userProfile.ageRangeMax ? parseInt(String(userProfile.ageRangeMax), 10) : null
   const hasAgeRange =
     ageRangeMin !== null &&
@@ -431,12 +425,15 @@ export async function findNearbyMatches(
     !Number.isNaN(ageRangeMin) &&
     !Number.isNaN(ageRangeMax)
 
-  const completedSnap = await db.collection('quizProgress').where('completed', '==', true).get()
+  const matchingQuizDocs = await getMatchingEligibleQuizDocs()
+  const quizDocById = new Map(matchingQuizDocs.map((doc) => [doc.id, doc]))
   const scored: ScoredCandidate[] = []
 
-  for (const doc of completedSnap.docs) {
+  for (const doc of matchingQuizDocs) {
     if (doc.id === uid) continue
-    const otherQuiz = normalizeQuizProgress(doc.data())
+    const raw = doc.data() ?? {}
+    if (!isQuizCompleteForMatching(raw)) continue
+    const otherQuiz = normalizeQuizProgress(raw)
 
     if (viewerDemographicsSet) {
       const otherGender = demoAnswer(otherQuiz, 'demo_000', 0)
@@ -479,14 +476,12 @@ export async function findNearbyMatches(
       : [...topCandidateIds, ...extraProximityIds.filter((id) => !topSet.has(id))]
   const compatById = new Map(scored.map((entry) => [entry.userId, entry.compat]))
 
-  const verifiedEmailMap = await getVerifiedEmailMap(candidateIds)
   const { profileById, userById } = await loadProfileMaps(candidateIds)
 
   const geocodeRequests: Array<{ userId: string; location: string; city?: string; stateCode?: string }> =
     []
 
   for (const candidateId of candidateIds) {
-    if (verifiedEmailMap.get(candidateId) !== true) continue
     const publicProfile = profileById.get(candidateId)
     const privateProfile = userById.get(candidateId)
     if (!publicProfile || !privateProfile) continue
@@ -528,8 +523,6 @@ export async function findNearbyMatches(
   const matches: Record<string, unknown>[] = []
 
   for (const candidateId of candidateIds) {
-    if (verifiedEmailMap.get(candidateId) !== true) continue
-
     const publicProfile = profileById.get(candidateId)
     const privateProfile = userById.get(candidateId)
     if (!publicProfile || !privateProfile) continue
@@ -614,7 +607,7 @@ export async function findNearbyMatches(
       compatibility: compat,
       distance: Math.round(distance),
       sameMetro: inSameMetro,
-      archetype: completedSnap.docs.find((doc) => doc.id === candidateId)?.data()?.archetype ?? null,
+      archetype: quizDocById.get(candidateId)?.data()?.archetype ?? null,
       subscriptionTier: effectiveSubscriptionTier(otherUser),
       profilePhotoVerified: isProfilePhotoIdentityVerified(otherUser, p),
     })

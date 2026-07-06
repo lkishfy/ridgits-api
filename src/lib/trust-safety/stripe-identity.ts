@@ -18,7 +18,6 @@ import {
 import {
   computeAgeFromDateOfBirth,
   MINIMUM_AGE_YEARS,
-  minimumAgeErrorMessage,
   requireUserBirthYearOnFile,
 } from '@/lib/trust-safety/age'
 
@@ -450,23 +449,24 @@ export async function applyVerificationSessionUpdate(session: Stripe.Identity.Ve
 
       if (allowVerified) {
         update.identityVerifiedAt = FieldValue.serverTimestamp()
-      }
 
-      if (allowVerified) {
-        const documentHash = await resolveIdentityDocumentFingerprint(stripe, session)
+        if (documentHash) {
+          await claimIdentityDocumentForUser(uid, documentHash)
+        }
 
-      if (identityRequiresPhoneVerification()) {
-        const verifiedPhone = await resolveVerifiedPhone(stripe, session)
-        if (verifiedPhone) {
-          try {
-            const e164 = normalizeE164Phone(verifiedPhone)
-            await assertPhoneNotAlreadyClaimed(e164, uid)
-            await claimPhoneForUser(uid, e164)
-            update.phoneVerificationStatus = 'verified'
-            update.phoneVerifiedAt = FieldValue.serverTimestamp()
-          } catch (error) {
-            console.error('[stripe-identity] phone claim failed after verification', uid, error)
-            update.phoneVerificationStatus = 'failed'
+        if (identityRequiresPhoneVerification()) {
+          const verifiedPhone = await resolveVerifiedPhone(stripe, session)
+          if (verifiedPhone) {
+            try {
+              const e164 = normalizeE164Phone(verifiedPhone)
+              await assertPhoneNotAlreadyClaimed(e164, uid)
+              await claimPhoneForUser(uid, e164)
+              update.phoneVerificationStatus = 'verified'
+              update.phoneVerifiedAt = FieldValue.serverTimestamp()
+            } catch (error) {
+              console.error('[stripe-identity] phone claim failed after verification', uid, error)
+              update.phoneVerificationStatus = 'failed'
+            }
           }
         }
       }

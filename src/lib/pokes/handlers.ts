@@ -27,17 +27,8 @@ async function ensureNoMutualBlocks(senderId: string, recipientId: string) {
 export async function sendPoke(
   senderId: string,
   toUserId: string,
-  actor: { emailVerified: boolean; email?: string | null },
 ) {
   if (senderId === toUserId) throw new ApiError('You cannot poke yourself.', 400)
-
-  if (!actor.emailVerified) {
-    throw new ApiError(
-      'Please verify your email address before sending pokes. Check your inbox for the verification link, or resend it from Settings.',
-      403,
-      'EMAIL_NOT_VERIFIED',
-    )
-  }
 
   await requireUserBirthYearOnFile(senderId)
 
