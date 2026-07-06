@@ -1,4 +1,4 @@
-import { NextRequest } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 
 const DEFAULT_ALLOWED_ORIGINS = [
   'https://ridgits.com',
@@ -17,7 +17,7 @@ function allowedOrigins(): Set<string> {
   return new Set([...DEFAULT_ALLOWED_ORIGINS, ...extra])
 }
 
-/** CORS headers for public web → ridgits-api calls (e.g. validate-signup). */
+/** CORS headers for Ridgits web → ridgits-api calls. */
 export function publicApiCorsHeaders(request: NextRequest): Record<string, string> {
   const origin = request.headers.get('origin')
   if (!origin || !allowedOrigins().has(origin)) {
@@ -26,7 +26,26 @@ export function publicApiCorsHeaders(request: NextRequest): Record<string, strin
   return {
     'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     Vary: 'Origin',
   }
+}
+
+export function applyWebCors(response: NextResponse, request: NextRequest): NextResponse {
+  for (const [key, value] of Object.entries(publicApiCorsHeaders(request))) {
+    response.headers.set(key, value)
+  }
+  return response
+}
+
+export function webCorsJson(
+  request: NextRequest,
+  body: unknown,
+  init?: ResponseInit,
+): NextResponse {
+  const headers = new Headers(init?.headers)
+  for (const [key, value] of Object.entries(publicApiCorsHeaders(request))) {
+    headers.set(key, value)
+  }
+  return NextResponse.json(body, { ...init, headers })
 }

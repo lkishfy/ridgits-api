@@ -14,6 +14,7 @@ import {
   nearbyCloseMatchFloorMiles,
   nearbySearchMinRadiusMiles,
 } from '@/lib/ridgits-products'
+import { applyWebCors, publicApiCorsHeaders, webCorsJson } from '@/lib/trust-safety/cors'
 
 export const maxDuration = 300
 
@@ -23,9 +24,16 @@ function readDistanceMiles(match: Record<string, unknown>): number {
   return 0
 }
 
+export async function OPTIONS(request: NextRequest) {
+  return new NextResponse(null, {
+    status: 204,
+    headers: publicApiCorsHeaders(request),
+  })
+}
+
 export async function POST(request: NextRequest) {
   const auth = await requireRidgitsAuth(request)
-  if (isNextResponse(auth)) return auth
+  if (isNextResponse(auth)) return applyWebCors(auth, request)
 
   let body: {
     maxDistance?: number
@@ -56,7 +64,8 @@ export async function POST(request: NextRequest) {
       const floor = nearbyCloseMatchFloorMiles(tier, true)
       const metroSearch = isMetroRadiusPreset(requested)
       if (metroSearch && !canAccessMetroSearch(tier, true)) {
-        return NextResponse.json(
+        return webCorsJson(
+          request,
           { error: 'Metro area search requires Ridgits Premium or Ultra.' },
           { status: 403 },
         )
@@ -83,7 +92,7 @@ export async function POST(request: NextRequest) {
               return miles >= floor
             })
           : matches
-      return NextResponse.json({ matches: filtered, closeMatchCount, closeMatches })
+      return webCorsJson(request, { matches: filtered, closeMatchCount, closeMatches })
     }
 
     if (body.previewCloseMatches) {
@@ -97,7 +106,7 @@ export async function POST(request: NextRequest) {
         minCompatibility,
         { closeCountOnly: true, reviewBypass },
       )
-      return NextResponse.json({ matches: [], closeMatchCount, closeMatches })
+      return webCorsJson(request, { matches: [], closeMatchCount, closeMatches })
     }
 
     const maxDistance = Math.min(
@@ -115,10 +124,10 @@ export async function POST(request: NextRequest) {
       return miles >= CLOSE_MATCHES_THRESHOLD_MILES
     })
 
-    return NextResponse.json({ matches, closeMatchCount, closeMatches })
+    return webCorsJson(request, { matches, closeMatchCount, closeMatches })
   } catch (error) {
     const { message, status } = apiErrorResponse(error)
     console.error('[matches/nearby]', auth.uid, message)
-    return NextResponse.json({ error: message }, { status })
+    return webCorsJson(request, { error: message }, { status })
   }
 }
