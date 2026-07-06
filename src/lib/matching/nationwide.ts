@@ -16,12 +16,13 @@ import {
 } from '@/lib/matching/demographics'
 import { readStoredCoords } from '@/lib/matching/geocode-cache'
 import { sharedMetroArea } from '@/lib/location/metro-areas'
+import { isProfileInUnitedStates } from '@/lib/location/normalize'
 import { normalizeQuizProgress, syncQuizProgressForMatching } from '@/lib/matching/quiz-normalize'
 import { effectiveSubscriptionTier } from '@/lib/subscription-badge'
 import { isProfilePhotoIdentityVerified } from '@/lib/trust-safety/profile-identity-match'
 
 export const NATIONWIDE_CACHE_TTL_MS = 24 * 60 * 60 * 1000
-export const NATIONWIDE_CACHE_VERSION = 19
+export const NATIONWIDE_CACHE_VERSION = 20
 
 function cachedMatchesNeedRecompute(matches: Record<string, unknown>[]): boolean {
   if (matches.length === 0) return true
@@ -32,13 +33,15 @@ function resolveNationwideDistanceMiles(
   viewerProfile: Record<string, unknown>,
   otherProfile: Record<string, unknown>,
 ): number | null {
-  if (sharedMetroArea(viewerProfile, otherProfile)) return 0
-
   const viewerCoords = readStoredCoords(viewerProfile)
   const otherCoords = readStoredCoords(otherProfile)
-  if (!viewerCoords || !otherCoords) return null
-
-  return Math.round(haversineMiles(viewerCoords.lat, viewerCoords.lng, otherCoords.lat, otherCoords.lng))
+  if (viewerCoords && otherCoords) {
+    return Math.round(
+      haversineMiles(viewerCoords.lat, viewerCoords.lng, otherCoords.lat, otherCoords.lng),
+    )
+  }
+  if (sharedMetroArea(viewerProfile, otherProfile)) return 0
+  return null
 }
 
 async function validateNationwideMatches(matches: Record<string, unknown>[]) {
@@ -58,6 +61,9 @@ async function validateNationwideMatches(matches: Record<string, unknown>[]) {
     const profile = publicProfileSnap.data() ?? {}
     const userData = userSnap.data() ?? {}
     if (!isVisibleInCommunity(profile) || !isVisibleInCommunity(userData)) continue
+
+    const merged = { ...userData, ...profile }
+    if (!isProfileInUnitedStates(merged)) continue
 
     const name = String(profile.name ?? match.name ?? '').trim()
     const image = String(profile.image ?? match.image ?? '').trim()
@@ -113,7 +119,7 @@ async function filterNationwideMatchesForViewer(
   return filtered
 }
 
-export async function getTopNationwideMatches(uid: string, limit = 10, forceRefresh = false) {
+export async function getTopNationwideMatches(uid: string, limit = 50, forceRefresh = false) {
   const db = getDb()
   const cacheRef = db.collection('topNationwideMatches').doc(uid)
   const cacheSnap = await cacheRef.get()
@@ -169,6 +175,18 @@ export async function computeTopNationwideMatchesInternal(uid: string) {
   ])
   const userPublic = userPublicSnap.exists ? (userPublicSnap.data() ?? {}) : {}
   const viewerProfile = { ...userProfile, ...userPublic }
+  if (!isProfileInUnitedStates(viewerProfile)) {
+    await db.collection('topNationwideMatches').doc(uid).set(
+      {
+        matches: [],
+        updatedAt: FieldValue.serverTimestamp(),
+        userId: uid,
+        version: NATIONWIDE_CACHE_VERSION,
+      },
+      { merge: true },
+    )
+    return []
+  }
 
   const myGender = demoAnswer(userQuiz, 'demo_000', 0)
   const myInterestedIn = demoAnswer(userQuiz, 'demo_001', 1)
@@ -239,6 +257,8 @@ export async function computeTopNationwideMatchesInternal(uid: string) {
     }
 
     const otherProfile = { ...otherUserProfile, ...p }
+    if (!isProfileInUnitedStates(otherProfile)) continue
+
     const distance = resolveNationwideDistanceMiles(viewerProfile, otherProfile)
 
     results.push({

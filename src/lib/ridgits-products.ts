@@ -20,6 +20,18 @@ export const MAX_NEARBY_RADIUS_MILES = 150
 /** Quick-select radius chips (mi). Tier rules gate which values are selectable. */
 export const RADIUS_PRESET_MILES = [0, 10, 25, 30, 50, 150] as const
 
+export function canAccessMetroSearch(
+  tier: string | null | undefined,
+  hasNearbyAccess: boolean,
+): boolean {
+  if (!hasNearbyAccess) return false
+  return tier === 'premium' || tier === 'ultra'
+}
+
+export function isMetroRadiusPreset(radiusMiles: number): boolean {
+  return radiusMiles === 0
+}
+
 export function nearbySearchMinRadiusMiles(tier: string | null | undefined): number {
   switch (tier) {
     case 'plus':
@@ -45,6 +57,9 @@ export function isRadiusLockedForAccess(
   tier: string | null | undefined,
   hasNearbyAccess: boolean,
 ): boolean {
+  if (isMetroRadiusPreset(radiusMiles)) {
+    return !canAccessMetroSearch(tier, hasNearbyAccess)
+  }
   return radiusMiles < nearbySearchMinRadiusMilesForAccess(tier, hasNearbyAccess)
 }
 

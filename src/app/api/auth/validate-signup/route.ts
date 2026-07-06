@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { isDisposableEmail, assertValidEmailFormat } from '@/lib/trust-safety/disposable-email'
-import { isValidBirthYear, computeAge, MINIMUM_AGE_YEARS } from '@/lib/trust-safety/age'
+import { isValidBirthYear, computeAge, MINIMUM_AGE_YEARS, minimumAgeErrorMessage } from '@/lib/trust-safety/age'
 import { enforceRateLimit, getClientIp } from '@/lib/trust-safety/rate-limit'
 import { publicApiCorsHeaders } from '@/lib/trust-safety/cors'
 import { apiErrorResponse } from '@/lib/api-errors'
@@ -75,7 +75,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(
           {
             ok: false,
-            error: 'You must be at least 18 years old to use Ridgits.',
+            error: minimumAgeErrorMessage(),
             code: 'UNDERAGE',
           },
           { headers: cors },

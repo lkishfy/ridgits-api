@@ -66,7 +66,9 @@ export type NearbyMatchScanResult = {
   closeMatches: CloseMatchPreview[]
 }
 
-const MAX_CANDIDATES = 120
+const MAX_CANDIDATES = 400
+/** When the scored pool is small enough, distance-filter every compatible candidate. */
+const MAX_FULL_POOL_CANDIDATES = 500
 const MAX_CLOSE_MATCH_PREVIEWS = 5
 const PROFILE_BATCH_SIZE = 10
 
@@ -98,6 +100,19 @@ function isCloseDistance(
   if (distance == null) return false
   if (metroOnly) return distance === 0
   return distance >= 0 && distance < thresholdMiles
+}
+
+function buildCloseMatchPreviews(matches: Record<string, unknown>[]): CloseMatchPreview[] {
+  const previews: CloseMatchPreview[] = []
+  for (const match of matches) {
+    if (previews.length >= MAX_CLOSE_MATCH_PREVIEWS) break
+    const userId = String(match.userId ?? '')
+    const name = String(match.name ?? '').trim()
+    const image = String(match.image ?? '').trim()
+    if (!userId || !name || name.toLowerCase() === 'anonymous' || !image) continue
+    previews.push({ userId, name, image })
+  }
+  return previews
 }
 
 async function resolveCoords(
@@ -153,11 +168,13 @@ export async function distanceMilesBetweenUsers(
   userBId: string,
   userBProfile: Record<string, unknown>,
 ): Promise<number | null> {
-  if (sharedMetroArea(userAProfile, userBProfile)) return 0
   const coordsA = await resolveCoords(userAId, userAProfile, 'users')
   const coordsB = await resolveCoords(userBId, userBProfile, 'publicProfiles')
-  if (!coordsA || !coordsB) return null
-  return Math.round(haversineMiles(coordsA.lat, coordsA.lng, coordsB.lat, coordsB.lng))
+  if (coordsA && coordsB) {
+    return Math.round(haversineMiles(coordsA.lat, coordsA.lng, coordsB.lat, coordsB.lng))
+  }
+  if (sharedMetroArea(userAProfile, userBProfile)) return 0
+  return null
 }
 
 type ScoredCandidate = {
@@ -170,12 +187,12 @@ function resolveCloseDistanceMiles(
   myProfile: Record<string, unknown>,
   otherProfile: Record<string, unknown>,
 ): number | null {
-  if (sharedMetroArea(myProfile, otherProfile)) return 0
-
   const otherCoords = readStoredCoords(otherProfile)
-  if (!otherCoords) return null
-
-  return haversineMiles(myCoords.lat, myCoords.lng, otherCoords.lat, otherCoords.lng)
+  if (otherCoords && isInContinentalUS(otherCoords.lat, otherCoords.lng)) {
+    return haversineMiles(myCoords.lat, myCoords.lng, otherCoords.lat, otherCoords.lng)
+  }
+  if (sharedMetroArea(myProfile, otherProfile)) return 0
+  return null
 }
 
 async function loadProfileMaps(
@@ -231,27 +248,23 @@ function passesProfileFilters(
   return true
 }
 
-/** Count close matches and pick top previews from the full scored pool (metro + stored coords). */
-async function computeCloseMatches(
+/** Discover nearby user ids from the scored pool (stored coords + metro). Used only to widen candidates. */
+async function discoverProximityUserIds(
   scored: ScoredCandidate[],
   mergedProfile: Record<string, unknown>,
   myCoords: Coords,
   hasAgeRange: boolean,
   ageRangeMin: number | null,
   ageRangeMax: number | null,
-  closeMatchThresholdMiles: number,
-  closeMatchMetroOnly: boolean,
-): Promise<CloseMatchScanResult> {
-  if (scored.length === 0) return { count: 0, previews: [], userIds: [] }
+  proximityThresholdMiles: number,
+): Promise<string[]> {
+  if (scored.length === 0) return []
 
   const allIds = scored.map((entry) => entry.userId)
   const verifiedEmailMap = await getVerifiedEmailMap(allIds)
   const { profileById, userById } = await loadProfileMaps(allIds)
 
-  let count = 0
-  const previews: CloseMatchPreview[] = []
   const userIds: string[] = []
-
   for (const { userId } of scored) {
     const publicProfile = profileById.get(userId)
     const privateProfile = userById.get(userId)
@@ -272,6 +285,60 @@ async function computeCloseMatches(
 
     const mergedOther = { ...privateProfile, ...publicProfile }
     const distance = resolveCloseDistanceMiles(myCoords, mergedProfile, mergedOther)
+    if (distance == null || distance > proximityThresholdMiles) continue
+    userIds.push(userId)
+  }
+
+  return userIds
+}
+
+/** Count hidden close matches from the same candidate pool + geocodes as the visible list. */
+async function computeCloseMatchesForCandidates(
+  candidateIds: string[],
+  mergedProfile: Record<string, unknown>,
+  myCoords: Coords,
+  hasAgeRange: boolean,
+  ageRangeMin: number | null,
+  ageRangeMax: number | null,
+  closeMatchThresholdMiles: number,
+  closeMatchMetroOnly: boolean,
+  geocodeByLocation: Map<string, Coords>,
+): Promise<CloseMatchScanResult> {
+  if (candidateIds.length === 0) return { count: 0, previews: [], userIds: [] }
+
+  const verifiedEmailMap = await getVerifiedEmailMap(candidateIds)
+  const { profileById, userById } = await loadProfileMaps(candidateIds)
+
+  let count = 0
+  const previews: CloseMatchPreview[] = []
+  const userIds: string[] = []
+
+  for (const userId of candidateIds) {
+    const publicProfile = profileById.get(userId)
+    const privateProfile = userById.get(userId)
+    if (!publicProfile || !privateProfile) continue
+    if (
+      !passesProfileFilters(
+        userId,
+        publicProfile,
+        privateProfile,
+        verifiedEmailMap,
+        hasAgeRange,
+        ageRangeMin,
+        ageRangeMax,
+      )
+    ) {
+      continue
+    }
+
+    const mergedOther = { ...privateProfile, ...publicProfile }
+    const distance = resolveDistanceMiles(
+      myCoords,
+      mergedProfile,
+      mergedOther,
+      readStoredCoords(mergedOther),
+      geocodeByLocation,
+    )
     if (!isCloseDistance(distance, closeMatchThresholdMiles, closeMatchMetroOnly)) continue
 
     count += 1
@@ -296,16 +363,16 @@ function resolveDistanceMiles(
   otherCoords: Coords | null,
   geocodeByLocation: Map<string, Coords>,
 ): number | null {
-  if (sharedMetroArea(myProfile, otherProfile)) return 0
-
   let coords = otherCoords
   if (!coords) {
     const locationKey = String(otherProfile.location ?? '').trim().toLowerCase()
     coords = geocodeByLocation.get(locationKey) ?? null
   }
-  if (!coords || !isInContinentalUS(coords.lat, coords.lng)) return null
-
-  return haversineMiles(myCoords.lat, myCoords.lng, coords.lat, coords.lng)
+  if (coords && isInContinentalUS(coords.lat, coords.lng)) {
+    return haversineMiles(myCoords.lat, myCoords.lng, coords.lat, coords.lng)
+  }
+  if (sharedMetroArea(myProfile, otherProfile)) return 0
+  return null
 }
 
 export async function findNearbyMatches(
@@ -390,28 +457,26 @@ export async function findNearbyMatches(
 
   scored.sort((a, b) => b.compat.overall - a.compat.overall)
 
-  const shouldComputeCloseCount = closeCountOnly || includeCloseCount
-  const closeScan = shouldComputeCloseCount
-    ? await computeCloseMatches(
-        scored,
-        mergedProfile,
-        myCoords,
-        hasAgeRange,
-        ageRangeMin,
-        ageRangeMax,
-        closeMatchThresholdMiles,
-        closeMatchMetroOnly,
-      )
-    : { count: 0, previews: [], userIds: [] }
+  const revealCloseMatches = closeCountOnly || includeCloseMatchesInResults
 
-  if (closeCountOnly) {
-    return { matches: [], closeMatchCount: closeScan.count, closeMatches: closeScan.previews }
-  }
+  // Widen the candidate pool beyond top compatibility so local users are not dropped.
+  const proximityThresholdMiles = Math.max(maxDistance, CLOSE_MATCHES_THRESHOLD_MILES)
+  const extraProximityIds = await discoverProximityUserIds(
+    scored,
+    mergedProfile,
+    myCoords,
+    hasAgeRange,
+    ageRangeMin,
+    ageRangeMax,
+    proximityThresholdMiles,
+  )
 
   const topCandidateIds = scored.slice(0, MAX_CANDIDATES).map((entry) => entry.userId)
   const topSet = new Set(topCandidateIds)
-  const extraCloseIds = closeScan.userIds.filter((id) => !topSet.has(id))
-  const candidateIds = [...topCandidateIds, ...extraCloseIds]
+  const candidateIds =
+    scored.length <= MAX_FULL_POOL_CANDIDATES
+      ? [...new Set(scored.map((entry) => entry.userId))]
+      : [...topCandidateIds, ...extraProximityIds.filter((id) => !topSet.has(id))]
   const compatById = new Map(scored.map((entry) => [entry.userId, entry.compat]))
 
   const verifiedEmailMap = await getVerifiedEmailMap(candidateIds)
@@ -431,7 +496,6 @@ export async function findNearbyMatches(
     const location = String(publicProfile.location ?? '').trim()
     if (!location) continue
 
-    if (sharedMetroArea(mergedProfile, merged)) continue
     if (readStoredCoords(merged) && !coordsNeedRefresh(merged)) continue
 
     const fields = readProfileLocationFields(merged)
@@ -445,6 +509,21 @@ export async function findNearbyMatches(
   }
 
   const geocodeByLocation = await batchGeocodeLocations(geocodeRequests)
+
+  let closeScan: CloseMatchScanResult = { count: 0, previews: [], userIds: [] }
+  if (includeCloseCount && !closeCountOnly) {
+    closeScan = await computeCloseMatchesForCandidates(
+      candidateIds,
+      mergedProfile,
+      myCoords,
+      hasAgeRange,
+      ageRangeMin,
+      ageRangeMax,
+      closeMatchThresholdMiles,
+      closeMatchMetroOnly,
+      geocodeByLocation,
+    )
+  }
 
   const matches: Record<string, unknown>[] = []
 
@@ -507,12 +586,17 @@ export async function findNearbyMatches(
     if (
       isCloseDistance(distance, closeMatchThresholdMiles, closeMatchMetroOnly) &&
       includeCloseCount &&
-      !includeCloseMatchesInResults
+      !revealCloseMatches
     ) {
       continue
     }
 
-    if (distance > maxDistance) continue
+    const inSameMetro = sharedMetroArea(mergedProfile, mergedOther)
+    if (maxDistance === 0) {
+      if (!inSameMetro) continue
+    } else if (distance > maxDistance) {
+      continue
+    }
 
     matches.push({
       userId: candidateId,
@@ -529,6 +613,7 @@ export async function findNearbyMatches(
       overall: compat.overall,
       compatibility: compat,
       distance: Math.round(distance),
+      sameMetro: inSameMetro,
       archetype: completedSnap.docs.find((doc) => doc.id === candidateId)?.data()?.archetype ?? null,
       subscriptionTier: effectiveSubscriptionTier(otherUser),
       profilePhotoVerified: isProfilePhotoIdentityVerified(otherUser, p),
@@ -536,8 +621,24 @@ export async function findNearbyMatches(
   }
 
   matches.sort((a, b) => (b.overall as number) - (a.overall as number))
+  const formatted = matches.map(formatMatchForClient)
+
+  if (closeCountOnly) {
+    let eligible = formatted
+    if (closeMatchMetroOnly) {
+      eligible = formatted.filter(
+        (match) => (match as Record<string, unknown>).sameMetro === true,
+      )
+    }
+    return {
+      matches: [],
+      closeMatchCount: eligible.length,
+      closeMatches: buildCloseMatchPreviews(eligible),
+    }
+  }
+
   return {
-    matches: matches.map(formatMatchForClient),
+    matches: formatted,
     closeMatchCount: includeCloseCount ? closeScan.count : 0,
     closeMatches: includeCloseCount ? closeScan.previews : [],
   }

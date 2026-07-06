@@ -231,3 +231,116 @@ export function locationCacheKey(profile: Record<string, unknown>): string {
   if (normalized) return normalized.display
   return readProfileLocationFields(profile).location
 }
+
+const NON_US_COUNTRY_TOKENS = new Set([
+  'uk',
+  'united kingdom',
+  'england',
+  'scotland',
+  'wales',
+  'northern ireland',
+  'ireland',
+  'canada',
+  'mexico',
+  'australia',
+  'new zealand',
+  'france',
+  'germany',
+  'spain',
+  'italy',
+  'portugal',
+  'netherlands',
+  'belgium',
+  'switzerland',
+  'austria',
+  'sweden',
+  'norway',
+  'denmark',
+  'finland',
+  'poland',
+  'czech republic',
+  'czechia',
+  'hungary',
+  'romania',
+  'greece',
+  'turkey',
+  'israel',
+  'uae',
+  'united arab emirates',
+  'india',
+  'pakistan',
+  'china',
+  'japan',
+  'south korea',
+  'korea',
+  'singapore',
+  'hong kong',
+  'taiwan',
+  'thailand',
+  'vietnam',
+  'philippines',
+  'indonesia',
+  'brazil',
+  'argentina',
+  'colombia',
+  'chile',
+  'peru',
+  'south africa',
+  'nigeria',
+  'egypt',
+  'russia',
+  'ukraine',
+])
+
+/** Rough bounding box for US states and territories commonly geocoded for members. */
+export function isCoordinateInUnitedStates(lat: number, lng: number): boolean {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false
+  const inLower48 = lat >= 24.0 && lat <= 49.5 && lng >= -125.0 && lng <= -66.0
+  const inAlaska = lat >= 51.0 && lat <= 72.0 && lng >= -179.0 && lng <= -129.0
+  const inHawaii = lat >= 18.0 && lat <= 23.0 && lng >= -161.0 && lng <= -154.0
+  const inPuertoRico = lat >= 17.5 && lat <= 18.6 && lng >= -67.5 && lng <= -65.0
+  return inLower48 || inAlaska || inHawaii || inPuertoRico
+}
+
+function hasExplicitNonUSCountryLocation(location: string): boolean {
+  const trimmed = location.trim()
+  if (!trimmed) return false
+
+  const commaParts = trimmed
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+  if (commaParts.length >= 2) {
+    const last = commaParts[commaParts.length - 1]!.toLowerCase()
+    if (NON_US_COUNTRY_TOKENS.has(last)) return true
+    if (!US_COUNTRY_TOKENS.has(last) && !resolveStateCode(commaParts[commaParts.length - 1]!)) {
+      // Trailing token is neither US country nor US state — treat as non-US.
+      if (commaParts.length >= 3 || last.length > 3) return true
+    }
+  }
+
+  return false
+}
+
+/** True when a profile location resolves to the United States. */
+export function isProfileInUnitedStates(profile: Record<string, unknown>): boolean {
+  const fields = readProfileLocationFields(profile)
+  if (fields.stateCode && US_STATE_CODES.has(fields.stateCode.toUpperCase())) {
+    return true
+  }
+  if (fields.location && hasExplicitNonUSCountryLocation(fields.location)) {
+    return false
+  }
+  if (resolveProfileLocation(profile)) {
+    return true
+  }
+
+  const coords = profile.coordinates as { lat?: unknown; lng?: unknown } | undefined
+  const lat = typeof coords?.lat === 'number' ? coords.lat : null
+  const lng = typeof coords?.lng === 'number' ? coords.lng : null
+  if (lat != null && lng != null && isCoordinateInUnitedStates(lat, lng)) {
+    return true
+  }
+
+  return false
+}

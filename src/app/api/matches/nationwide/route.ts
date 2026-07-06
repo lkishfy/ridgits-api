@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
   try {
     const matches = await getTopNationwideMatches(
       auth.uid,
-      typeof body.limit === 'number' ? body.limit : 10,
+      typeof body.limit === 'number' ? body.limit : 50,
       body.forceRefresh === true,
     )
     return NextResponse.json({ matches })

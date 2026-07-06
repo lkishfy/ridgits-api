@@ -15,6 +15,12 @@ import {
   claimPhoneForUser,
   normalizeE164Phone,
 } from '@/lib/trust-safety/phone-safety'
+import {
+  computeAgeFromDateOfBirth,
+  MINIMUM_AGE_YEARS,
+  minimumAgeErrorMessage,
+  requireUserBirthYearOnFile,
+} from '@/lib/trust-safety/age'
 
 export const IDENTITY_APP_DEEP_LINK = 'ridgits://identity/complete'
 export const IDENTITY_RETURN_URL =
@@ -295,6 +301,8 @@ export async function createIdentityVerificationSession(
     )
   }
 
+  await requireUserBirthYearOnFile(uid)
+
   const currentStatus = await getIdentityStatus(uid)
   if (currentStatus.identityVerificationStatus === 'verified') {
     const phoneOk =
@@ -423,16 +431,29 @@ export async function applyVerificationSessionUpdate(session: Stripe.Identity.Ve
     }
 
     if (allowVerified) {
-      update.identityVerifiedAt = FieldValue.serverTimestamp()
-
       const dob = session.verified_outputs?.dob
       if (dob?.year) {
-        update.identityVerifiedBirthYear = dob.year
+        const verifiedAge = computeAgeFromDateOfBirth({
+          year: dob.year,
+          month: dob.month ?? undefined,
+          day: dob.day ?? undefined,
+        })
+        if (verifiedAge < MINIMUM_AGE_YEARS) {
+          allowVerified = false
+          update.identityVerificationStatus = 'failed'
+          update.trustSafetyFlags = FieldValue.arrayUnion('underage_identity_document')
+          console.warn('[stripe-identity] underage identity verification blocked', uid, verifiedAge)
+        } else {
+          update.identityVerifiedBirthYear = dob.year
+        }
       }
 
-      if (documentHash) {
-        await claimIdentityDocumentForUser(uid, documentHash)
+      if (allowVerified) {
+        update.identityVerifiedAt = FieldValue.serverTimestamp()
       }
+
+      if (allowVerified) {
+        const documentHash = await resolveIdentityDocumentFingerprint(stripe, session)
 
       if (identityRequiresPhoneVerification()) {
         const verifiedPhone = await resolveVerifiedPhone(stripe, session)

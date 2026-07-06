@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeUSLocation, stripTrailingCountryParts } from '@/lib/location/normalize'
+import {
+  isCoordinateInUnitedStates,
+  isProfileInUnitedStates,
+  normalizeUSLocation,
+  stripTrailingCountryParts,
+} from '@/lib/location/normalize'
 import { isNYMetroArea, sharedMetroArea } from '@/lib/location/metro-areas'
 
 describe('stripTrailingCountryParts', () => {
@@ -89,5 +94,46 @@ describe('metro area detection', () => {
 
   it('detects bare New York as NYC metro', () => {
     expect(isNYMetroArea({ location: 'New York' })).toBe(true)
+  })
+})
+
+describe('isProfileInUnitedStates', () => {
+  it('accepts US city and state profiles', () => {
+    expect(isProfileInUnitedStates({ location: 'Brooklyn, NY' })).toBe(true)
+    expect(isProfileInUnitedStates({ locationCity: 'Austin', locationStateCode: 'TX' })).toBe(true)
+  })
+
+  it('rejects explicit non-US countries', () => {
+    expect(isProfileInUnitedStates({ location: 'London, UK' })).toBe(false)
+    expect(isProfileInUnitedStates({ location: 'Toronto, ON, Canada' })).toBe(false)
+    expect(isProfileInUnitedStates({ location: 'Paris, France' })).toBe(false)
+  })
+
+  it('accepts stored US coordinates when location text is sparse', () => {
+    expect(
+      isProfileInUnitedStates({
+        location: 'Brooklyn',
+        coordinates: { lat: 40.6782, lng: -73.9442 },
+      }),
+    ).toBe(true)
+  })
+
+  it('rejects coordinates outside the United States', () => {
+    expect(
+      isProfileInUnitedStates({
+        location: 'London',
+        coordinates: { lat: 51.5074, lng: -0.1278 },
+      }),
+    ).toBe(false)
+  })
+})
+
+describe('isCoordinateInUnitedStates', () => {
+  it('includes lower 48, Alaska, Hawaii, and Puerto Rico', () => {
+    expect(isCoordinateInUnitedStates(40.7128, -74.006)).toBe(true)
+    expect(isCoordinateInUnitedStates(61.2181, -149.9003)).toBe(true)
+    expect(isCoordinateInUnitedStates(21.3069, -157.8583)).toBe(true)
+    expect(isCoordinateInUnitedStates(18.4655, -66.1057)).toBe(true)
+    expect(isCoordinateInUnitedStates(51.5074, -0.1278)).toBe(false)
   })
 })
