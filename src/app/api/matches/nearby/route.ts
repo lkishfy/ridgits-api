@@ -3,8 +3,6 @@ import { apiErrorResponse } from '@/lib/api-errors'
 import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
 import { findNearbyMatches } from '@/lib/matching/nearby'
 import { isRidgitsBypassEmail } from '@/lib/ridgits-bypass'
-import { getNearbyAccess } from '@/lib/ridgits-subscription'
-import { repairStaleMembershipTier } from '@/lib/subscription-badge'
 import {
   CLOSE_MATCHES_THRESHOLD_MILES,
   MAX_NEARBY_RADIUS_MILES,
@@ -13,8 +11,12 @@ import {
   isMetroRadiusPreset,
   nearbyCloseMatchFloorMiles,
   nearbySearchMinRadiusMiles,
+  webNearbyCloseMatchFloorMiles,
+  webNearbySearchMinRadiusMiles,
 } from '@/lib/ridgits-products'
-import { applyWebCors, publicApiCorsHeaders, webCorsJson } from '@/lib/trust-safety/cors'
+import { getNearbyAccess } from '@/lib/ridgits-subscription'
+import { repairStaleMembershipTier } from '@/lib/subscription-badge'
+import { applyWebCors, isRidgitsWebClient, publicApiCorsHeaders, webCorsJson } from '@/lib/trust-safety/cors'
 
 export const maxDuration = 300
 
@@ -22,6 +24,52 @@ function readDistanceMiles(match: Record<string, unknown>): number {
   if (typeof match.distance === 'number') return match.distance
   if (typeof match.distanceMiles === 'number') return match.distanceMiles
   return 0
+}
+
+async function runNearbySearch(
+  uid: string,
+  requested: number,
+  minCompatibility: number,
+  options: {
+    tier: string
+    hasNearbyAccess: boolean
+    minRadius: number
+    floor: number
+    reviewBypass: boolean
+  },
+) {
+  const metroSearch = isMetroRadiusPreset(requested)
+  if (metroSearch && !canAccessMetroSearch(options.tier, options.hasNearbyAccess)) {
+    return {
+      error: 'Metro area search requires Ridgits Premium or Ultra.',
+      status: 403 as const,
+    }
+  }
+
+  const maxDistance = metroSearch
+    ? 0
+    : Math.min(Math.max(requested, options.minRadius), MAX_NEARBY_RADIUS_MILES)
+  const includeCloseInResults = options.floor === 0
+  const { matches, closeMatchCount, closeMatches } = await findNearbyMatches(
+    uid,
+    maxDistance,
+    minCompatibility,
+    {
+      includeCloseCount: options.floor > 0,
+      includeCloseMatchesInResults: includeCloseInResults,
+      closeMatchMetroOnly: options.tier === 'plus',
+      reviewBypass: options.reviewBypass,
+    },
+  )
+  const filtered =
+    options.floor > 0
+      ? matches.filter((match) => {
+          const miles = readDistanceMiles(match as Record<string, unknown>)
+          return miles >= options.floor
+        })
+      : matches
+
+  return { matches: filtered, closeMatchCount, closeMatches }
 }
 
 export async function OPTIONS(request: NextRequest) {
@@ -58,42 +106,7 @@ export async function POST(request: NextRequest) {
         : 50
 
     const reviewBypass = isRidgitsBypassEmail(auth.email)
-    if (access.hasNearbyAccess) {
-      const tier = access.subscriptionTier ?? 'free'
-      const minRadius = nearbySearchMinRadiusMiles(tier)
-      const floor = nearbyCloseMatchFloorMiles(tier, true)
-      const metroSearch = isMetroRadiusPreset(requested)
-      if (metroSearch && !canAccessMetroSearch(tier, true)) {
-        return webCorsJson(
-          request,
-          { error: 'Metro area search requires Ridgits Premium or Ultra.' },
-          { status: 403 },
-        )
-      }
-      const maxDistance = metroSearch
-        ? 0
-        : Math.min(Math.max(requested, minRadius), MAX_NEARBY_RADIUS_MILES)
-      const includeCloseInResults = floor === 0
-      const { matches, closeMatchCount, closeMatches } = await findNearbyMatches(
-        auth.uid,
-        maxDistance,
-        minCompatibility,
-        {
-          includeCloseCount: floor > 0,
-          includeCloseMatchesInResults: includeCloseInResults,
-          closeMatchMetroOnly: tier === 'plus',
-          reviewBypass,
-        },
-      )
-      const filtered =
-        floor > 0
-          ? matches.filter((match) => {
-              const miles = readDistanceMiles(match as Record<string, unknown>)
-              return miles >= floor
-            })
-          : matches
-      return webCorsJson(request, { matches: filtered, closeMatchCount, closeMatches })
-    }
+    const fromWeb = isRidgitsWebClient(request)
 
     if (body.previewCloseMatches) {
       const previewRadius =
@@ -107,6 +120,38 @@ export async function POST(request: NextRequest) {
         { closeCountOnly: true, reviewBypass },
       )
       return webCorsJson(request, { matches: [], closeMatchCount, closeMatches })
+    }
+
+    // Web: nearby search is free for all logged-in users (10–150 mi).
+    if (fromWeb) {
+      const tier = access.hasNearbyAccess ? (access.subscriptionTier ?? 'free') : 'free'
+      const result = await runNearbySearch(auth.uid, requested, minCompatibility, {
+        tier,
+        hasNearbyAccess: access.hasNearbyAccess,
+        minRadius: webNearbySearchMinRadiusMiles(tier),
+        floor: webNearbyCloseMatchFloorMiles(tier),
+        reviewBypass,
+      })
+      if ('error' in result) {
+        return webCorsJson(request, { error: result.error }, { status: result.status })
+      }
+      return webCorsJson(request, result)
+    }
+
+    // iOS / native: subscription tier gates nearby radius (unchanged).
+    if (access.hasNearbyAccess) {
+      const tier = access.subscriptionTier ?? 'free'
+      const result = await runNearbySearch(auth.uid, requested, minCompatibility, {
+        tier,
+        hasNearbyAccess: true,
+        minRadius: nearbySearchMinRadiusMiles(tier),
+        floor: nearbyCloseMatchFloorMiles(tier, true),
+        reviewBypass,
+      })
+      if ('error' in result) {
+        return webCorsJson(request, { error: result.error }, { status: result.status })
+      }
+      return webCorsJson(request, result)
     }
 
     const maxDistance = Math.min(

@@ -3,7 +3,7 @@ export const RIDGITS_BUNDLE_ID = process.env.APP_STORE_BUNDLE_ID ?? 'com.ridgits
 /** Non-renewing yearly nearby access — $29.99 */
 export const NEARBY_YEARLY_PRODUCT_ID = 'RidgitsNearbyYear2999'
 
-/** Matches closer than this are hidden for free users. */
+/** Matches closer than this are hidden for free users (iOS / native clients). */
 export const CLOSE_MATCHES_THRESHOLD_MILES = 30
 
 /** Ridgits+ minimum search radius (mi). */
@@ -12,7 +12,7 @@ export const PLUS_MIN_RADIUS_MILES = 10
 /** Ridgits Premium unlocks the 0 mi (metro) preset. */
 export const PREMIUM_RADIUS_PRESET_MILES = [0] as const
 
-/** Free members search from 30 to 150 miles (closer radii require Ridgits+). */
+/** Free members on iOS search from 30 to 150 miles (closer radii require Ridgits+). */
 export const UNSUBSCRIBED_MIN_RADIUS_MILES = 30
 
 export const MAX_NEARBY_RADIUS_MILES = 150
@@ -77,6 +77,15 @@ export function nearbyCloseMatchFloorMiles(
     default:
       return CLOSE_MATCHES_THRESHOLD_MILES
   }
+}
+
+/** Web: nearby search is free for all users (10–150 mi); metro still tier-gated. */
+export function webNearbySearchMinRadiusMiles(tier: string | null | undefined): number {
+  return nearbySearchMinRadiusMiles(tier === 'premium' || tier === 'ultra' ? tier : 'plus')
+}
+
+export function webNearbyCloseMatchFloorMiles(tier: string | null | undefined): number {
+  return tier === 'premium' || tier === 'ultra' ? 0 : PLUS_MIN_RADIUS_MILES
 }
 
 /** @deprecated Use CLOSE_MATCHES_THRESHOLD_MILES */

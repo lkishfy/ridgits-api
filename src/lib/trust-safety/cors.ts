@@ -38,6 +38,12 @@ export function applyWebCors(response: NextResponse, request: NextRequest): Next
   return response
 }
 
+/** True when the request comes from the Ridgits web app (browser Origin header). */
+export function isRidgitsWebClient(request: NextRequest): boolean {
+  const origin = request.headers.get('origin')
+  return !!origin && allowedOrigins().has(origin)
+}
+
 export function webCorsJson(
   request: NextRequest,
   body: unknown,
