@@ -1,5 +1,6 @@
 import { getDb } from '@/lib/firebase-admin'
 import { Timestamp } from 'firebase-admin/firestore'
+import { isRidgitsBypassEmail } from '@/lib/ridgits-bypass'
 import { effectiveSubscriptionTier } from '@/lib/subscription-badge'
 
 function parseExpiration(value: unknown): Date | null {
@@ -20,15 +21,6 @@ function parseExpiration(value: unknown): Date | null {
     return Number.isNaN(parsed) ? null : new Date(parsed)
   }
   return null
-}
-
-function isBypassEmail(email?: string | null): boolean {
-  if (!email) return false
-  const list = (process.env.RIDGITS_BYPASS_EMAILS ?? '')
-    .split(',')
-    .map((entry) => entry.trim().toLowerCase())
-    .filter(Boolean)
-  return list.includes(email.toLowerCase())
 }
 
 /** Active paid access — canceled subscriptions lose access immediately. */
@@ -61,7 +53,7 @@ export async function getNearbyAccess(
   subscriptionSource: 'stripe' | 'app_store' | 'bypass' | null
   subscriptionTier: string | null
 }> {
-  if (isBypassEmail(email)) {
+  if (isRidgitsBypassEmail(email)) {
     return {
       hasNearbyAccess: true,
       subscriptionExpiresAt: null,

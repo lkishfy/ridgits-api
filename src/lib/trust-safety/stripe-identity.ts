@@ -9,6 +9,7 @@ import {
   claimIdentityDocumentForUser,
   resolveIdentityDocumentFingerprint,
 } from '@/lib/trust-safety/identity-document-safety'
+import { isRidgitsBypassEmail } from '@/lib/ridgits-bypass'
 import { matchProfilePhotoToIdentity } from '@/lib/trust-safety/profile-identity-match'
 import {
   assertPhoneNotAlreadyClaimed,
@@ -230,7 +231,8 @@ export async function getIdentityStatus(uid: string): Promise<IdentityStatusPayl
   }
 }
 
-export async function requireIdentityVerified(uid: string): Promise<void> {
+export async function requireIdentityVerified(uid: string, email?: string | null): Promise<void> {
+  if (isRidgitsBypassEmail(email)) return
   const status = await getIdentityStatus(uid)
   if (status.identityVerificationStatus !== 'verified') {
     throw new ApiError(

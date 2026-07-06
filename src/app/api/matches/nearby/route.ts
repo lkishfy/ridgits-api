@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { apiErrorResponse } from '@/lib/api-errors'
 import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
 import { findNearbyMatches } from '@/lib/matching/nearby'
+import { isRidgitsBypassEmail } from '@/lib/ridgits-bypass'
 import { getNearbyAccess } from '@/lib/ridgits-subscription'
 import { repairStaleMembershipTier } from '@/lib/subscription-badge'
 import {
@@ -48,6 +49,7 @@ export async function POST(request: NextRequest) {
         ? body.maxDistance
         : 50
 
+    const reviewBypass = isRidgitsBypassEmail(auth.email)
     if (access.hasNearbyAccess) {
       const tier = access.subscriptionTier ?? 'free'
       const minRadius = nearbySearchMinRadiusMiles(tier)
@@ -71,6 +73,7 @@ export async function POST(request: NextRequest) {
           includeCloseCount: floor > 0,
           includeCloseMatchesInResults: includeCloseInResults,
           closeMatchMetroOnly: tier === 'plus',
+          reviewBypass,
         },
       )
       const filtered =
@@ -92,7 +95,7 @@ export async function POST(request: NextRequest) {
         auth.uid,
         previewRadius,
         minCompatibility,
-        { closeCountOnly: true },
+        { closeCountOnly: true, reviewBypass },
       )
       return NextResponse.json({ matches: [], closeMatchCount, closeMatches })
     }
@@ -105,7 +108,7 @@ export async function POST(request: NextRequest) {
       auth.uid,
       maxDistance,
       minCompatibility,
-      { includeCloseCount: true },
+      { includeCloseCount: true, reviewBypass },
     )
     const matches = allMatches.filter((match) => {
       const miles = readDistanceMiles(match as Record<string, unknown>)

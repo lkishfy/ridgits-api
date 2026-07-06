@@ -46,6 +46,8 @@ export type NearbyMatchScanOptions = {
   closeMatchThresholdMiles?: number
   /** When true, only count same-metro matches (distance 0) for the close-match teaser. */
   closeMatchMetroOnly?: boolean
+  /** App Review / QA bypass — skip quiz and location gates; return empty results if unset. */
+  reviewBypass?: boolean
 }
 
 export type CloseMatchPreview = {
@@ -379,6 +381,7 @@ export async function findNearbyMatches(
     includeCloseMatchesInResults = false,
     closeMatchThresholdMiles = CLOSE_MATCHES_THRESHOLD_MILES,
     closeMatchMetroOnly = false,
+    reviewBypass = false,
   } = options
   const db = getDb()
   const [userQuizSnap, userProfileSnap, userPublicSnap] = await Promise.all([
@@ -389,17 +392,28 @@ export async function findNearbyMatches(
 
   const userProfile = userProfileSnap.exists ? (userProfileSnap.data() ?? {}) : {}
 
-  if (!userQuizSnap.exists) {
-    if (isQuizCompleteForMatching({}, userProfile)) {
-      return { matches: [], closeMatchCount: 0, closeMatches: [] }
-    }
-    throw new ApiError('Complete the quiz before matching.', 412)
-  }
+  const emptyNearby = (): NearbyMatchScanResult => ({
+    matches: [],
+    closeMatchCount: 0,
+    closeMatches: [],
+  })
 
-  const rawQuiz = userQuizSnap.data() ?? {}
-  const userQuiz = await syncQuizProgressForMatching(uid, rawQuiz, userProfile)
-  if (!isQuizCompleteForMatching(rawQuiz, userProfile)) {
-    throw new ApiError('Complete the quiz before matching.', 412)
+  let userQuiz: ReturnType<typeof normalizeQuizProgress>
+  if (reviewBypass) {
+    userQuiz = normalizeQuizProgress({})
+  } else {
+    if (!userQuizSnap.exists) {
+      if (isQuizCompleteForMatching({}, userProfile)) {
+        return emptyNearby()
+      }
+      throw new ApiError('Complete the quiz before matching.', 412)
+    }
+
+    const rawQuiz = userQuizSnap.data() ?? {}
+    userQuiz = await syncQuizProgressForMatching(uid, rawQuiz, userProfile)
+    if (!isQuizCompleteForMatching(rawQuiz, userProfile)) {
+      throw new ApiError('Complete the quiz before matching.', 412)
+    }
   }
 
   const userPublic = userPublicSnap.exists ? (userPublicSnap.data() ?? {}) : {}
@@ -407,6 +421,7 @@ export async function findNearbyMatches(
 
   const myCoords = await resolveCoords(uid, mergedProfile, 'users')
   if (!myCoords) {
+    if (reviewBypass) return emptyNearby()
     throw new ApiError('Add a location to your profile to find nearby matches.', 412)
   }
 

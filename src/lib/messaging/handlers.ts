@@ -19,6 +19,7 @@ import { requireAccountCooldownElapsed } from '@/lib/trust-safety/account-age'
 import { requireUserBirthYearOnFile } from '@/lib/trust-safety/age'
 import { requireActiveSubscription } from '@/lib/trust-safety/subscription-gate'
 import { validateProfilePhotoUrl } from '@/lib/trust-safety/profile-photo'
+import { isRidgitsBypassEmail } from '@/lib/ridgits-bypass'
 import { requireIdentityVerified } from '@/lib/trust-safety/stripe-identity'
 import {
   getMonthlyMessageQuota,
@@ -60,6 +61,11 @@ async function ensureMessagingAllowed(uid: string) {
   const userSnap = await ensureUserExists(uid)
   if (!userSnap) throw new ApiError('You must complete your profile before messaging.', 412, 'USER_NOT_FOUND')
 
+  const userEmail = String(userSnap.data()?.email ?? '').trim() || null
+  if (isRidgitsBypassEmail(userEmail)) {
+    return { snap: userSnap, data: userSnap.data() ?? {} }
+  }
+
   await requireUserBirthYearOnFile(uid)
 
   const profileSnap = await getDb().collection('publicProfiles').doc(uid).get()
@@ -97,9 +103,7 @@ async function ensureMessagingAllowed(uid: string) {
     throw new ApiError(photoCheck.reason ?? 'A valid profile photo is required to message.', 412, 'INVALID_PROFILE_PHOTO')
   }
 
-  await requireIdentityVerified(uid)
-
-  const userEmail = String(userSnap.data()?.email ?? '').trim() || null
+  await requireIdentityVerified(uid, userEmail)
   await requireActiveSubscription(uid, userEmail)
 
   const data = userSnap.data() ?? {}
