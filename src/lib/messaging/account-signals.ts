@@ -1,5 +1,5 @@
 import { createHash } from 'crypto'
-import { FieldValue, Timestamp } from 'firebase-admin/firestore'
+import { FieldValue, Timestamp, type Firestore, type QueryDocumentSnapshot } from 'firebase-admin/firestore'
 import { getDb } from '@/lib/firebase-admin'
 import { analyzeProfileSolicitationSignals } from '@/lib/messaging/content-moderation'
 
@@ -18,6 +18,53 @@ const RAPID_START_THRESHOLD = 8
 
 function hashMessage(text: string): string {
   return createHash('sha256').update(text.trim().toLowerCase()).digest('hex').slice(0, 32)
+}
+
+const RAPID_START_SCAN_LIMIT = 100
+
+function isMissingFirestoreIndexError(error: unknown): boolean {
+  const code = (error as { code?: number | string })?.code
+  return code === 9 || code === 'failed-precondition'
+}
+
+function countRecentConversationStarts(
+  docs: QueryDocumentSnapshot[],
+  cutoffMs: number,
+): number {
+  let count = 0
+  for (const doc of docs) {
+    const createdAt = doc.data().createdAt as Timestamp | undefined
+    const ms = typeof createdAt?.toMillis === 'function' ? createdAt.toMillis() : 0
+    if (ms >= cutoffMs) count++
+    if (count >= RAPID_START_THRESHOLD) break
+  }
+  return count
+}
+
+async function countRecentConversationStartsByInitiator(
+  db: Firestore,
+  uid: string,
+  cutoffMs: number,
+): Promise<number> {
+  const since = Timestamp.fromMillis(cutoffMs)
+  try {
+    const recentStarts = await db
+      .collection('conversations')
+      .where('initiatorId', '==', uid)
+      .where('createdAt', '>=', since)
+      .limit(RAPID_START_THRESHOLD + 1)
+      .get()
+    return recentStarts.size
+  } catch (error) {
+    if (!isMissingFirestoreIndexError(error)) throw error
+  }
+
+  const recentStarts = await db
+    .collection('conversations')
+    .where('initiatorId', '==', uid)
+    .limit(RAPID_START_SCAN_LIMIT)
+    .get()
+  return countRecentConversationStarts(recentStarts.docs, cutoffMs)
 }
 
 /**
@@ -61,15 +108,10 @@ export async function evaluateMessagingAccountSignals(uid: string): Promise<Mess
     reasons.push('profile_payment_or_contact')
   }
 
-  const since = Timestamp.fromMillis(Date.now() - RAPID_START_WINDOW_MS)
-  const recentStarts = await db
-    .collection('conversations')
-    .where('initiatorId', '==', uid)
-    .where('createdAt', '>=', since)
-    .limit(RAPID_START_THRESHOLD + 1)
-    .get()
+  const cutoffMs = Date.now() - RAPID_START_WINDOW_MS
+  const recentStartCount = await countRecentConversationStartsByInitiator(db, uid, cutoffMs)
 
-  if (recentStarts.size >= RAPID_START_THRESHOLD) {
+  if (recentStartCount >= RAPID_START_THRESHOLD) {
     flagged = true
     reasons.push('rapid_conversation_starts')
   }
