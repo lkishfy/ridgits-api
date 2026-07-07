@@ -706,3 +706,62 @@ export async function markConversationRead(userId: string, conversationId: strin
 
   return { conversationId }
 }
+
+function isConversationClosed(convo: Record<string, unknown>): boolean {
+  const status = String(convo.status ?? '')
+  const isExpired = status === 'expired' || convo.isExpired === true
+  const expiresAt = convo.expiresAt as Timestamp | undefined
+  const timedOut = expiresAt ? expiresAt.toMillis() <= Date.now() : false
+  const messageCount = Number(convo.messageCount ?? 0)
+  const maxMessages = Number(convo.maxMessages ?? DEFAULT_MAX_MESSAGES)
+  return isExpired || timedOut || (status === 'active' && messageCount >= maxMessages)
+}
+
+export async function archiveConversation(userId: string, conversationId: string) {
+  const userSnap = await ensureUserExists(userId)
+  if (!userSnap) throw new ApiError('User not found.', 404)
+
+  const db = getDb()
+  const conversationRef = db.collection('conversations').doc(conversationId)
+  const snap = await conversationRef.get()
+  if (!snap.exists) throw new ApiError('Conversation not found.', 404)
+  const convo = snap.data() ?? {}
+
+  if (!Array.isArray(convo.participantIds) || !convo.participantIds.includes(userId)) {
+    throw new ApiError('You are not part of this conversation.', 403)
+  }
+  if (!isConversationClosed(convo)) {
+    throw new ApiError('Only expired conversations can be archived.', 412, 'CONVERSATION_NOT_CLOSED')
+  }
+
+  await conversationRef.update({
+    archivedBy: FieldValue.arrayUnion(userId),
+    updatedAt: FieldValue.serverTimestamp(),
+    [`participants.${userId}.archivedAt`]: FieldValue.serverTimestamp(),
+  })
+
+  return { conversationId, archived: true }
+}
+
+export async function unarchiveConversation(userId: string, conversationId: string) {
+  const userSnap = await ensureUserExists(userId)
+  if (!userSnap) throw new ApiError('User not found.', 404)
+
+  const db = getDb()
+  const conversationRef = db.collection('conversations').doc(conversationId)
+  const snap = await conversationRef.get()
+  if (!snap.exists) throw new ApiError('Conversation not found.', 404)
+  const convo = snap.data() ?? {}
+
+  if (!Array.isArray(convo.participantIds) || !convo.participantIds.includes(userId)) {
+    throw new ApiError('You are not part of this conversation.', 403)
+  }
+
+  await conversationRef.update({
+    archivedBy: FieldValue.arrayRemove(userId),
+    updatedAt: FieldValue.serverTimestamp(),
+    [`participants.${userId}.archivedAt`]: FieldValue.delete(),
+  })
+
+  return { conversationId, archived: false }
+}
