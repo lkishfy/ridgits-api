@@ -14,6 +14,7 @@ import {
   DEFAULT_MAX_MESSAGES,
   DEFAULT_SUSPENSION_MINUTES,
 } from '@/lib/messaging/constants'
+import { assertPhoneNumberNotTooEarly } from '@/lib/messaging/early-phone'
 import { isVisibleInCommunity } from '@/lib/matching/compatibility'
 import { requireAccountCooldownElapsed } from '@/lib/trust-safety/account-age'
 import { requireUserBirthYearOnFile } from '@/lib/trust-safety/age'
@@ -243,6 +244,8 @@ export async function startConversation(senderId: string, toUserId: string, mess
     { recipientId: toUserId },
   )
 
+  assertPhoneNumberNotTooEarly(0, normalizedMessage)
+
   const { data: senderData } = await ensureMessagingAllowed(senderId)
   requireAccountCooldownElapsed(senderData)
   const recipientSnap = await ensureUserExists(toUserId)
@@ -295,10 +298,7 @@ export async function startConversation(senderId: string, toUserId: string, mess
             )
           }
           const messageCount = (convo.messageCount as number) ?? 0
-          const maxMessages = Math.min(
-            typeof convo.maxMessages === 'number' && convo.maxMessages > 0 ? convo.maxMessages : DEFAULT_MAX_MESSAGES,
-            DEFAULT_MAX_MESSAGES,
-          )
+          const maxMessages = DEFAULT_MAX_MESSAGES
           if (messageCount >= maxMessages) {
             throw new ApiError(
               `Message limit reached. Conversations are limited to ${maxMessages} messages to encourage meeting in real life!`,
@@ -444,7 +444,7 @@ export async function approveConversation(userId: string, conversationId: string
       category: 'conversationApproved',
       type: 'conversation_approved',
       title: `${approverName} approved your message`,
-      body: 'You have 24 hours and 16 messages to connect. Make it count.',
+      body: `You have 24 hours and ${DEFAULT_MAX_MESSAGES} messages to connect. Make it count.`,
       collapseKey: `approved-${conversationId}`,
       data: {
         route: 'messages',
@@ -467,6 +467,9 @@ export async function sendMessage(senderId: string, conversationId: string, mess
   if (!preSnap.exists) throw new ApiError('Conversation not found.', 404)
   const preConvo = preSnap.data() ?? {}
   const preRecipientId = (preConvo.participantIds as string[] | undefined)?.find((id) => id !== senderId)
+  const preMessageCount = (preConvo.messageCount as number | undefined) ?? 0
+
+  assertPhoneNumberNotTooEarly(preMessageCount, normalizedMessage)
 
   const dmAnalysis = await enforceDmTextBeforeSend(
     senderId,
@@ -504,10 +507,7 @@ export async function sendMessage(senderId: string, conversationId: string, mess
     }
 
     const messageCount = (convo.messageCount as number) ?? 0
-    const maxMessages = Math.min(
-      typeof convo.maxMessages === 'number' && convo.maxMessages > 0 ? convo.maxMessages : DEFAULT_MAX_MESSAGES,
-      DEFAULT_MAX_MESSAGES,
-    )
+    const maxMessages = DEFAULT_MAX_MESSAGES
     if (messageCount >= maxMessages) {
       throw new ApiError(
         `Message limit reached. Conversations are limited to ${maxMessages} messages to encourage meeting in real life!`,

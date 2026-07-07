@@ -43,7 +43,7 @@ function usageRef(uid: string, periodKey: string) {
   return getDb().collection('users').doc(uid).collection('messageUsage').doc(periodKey)
 }
 
-/** Messaging has no monthly send cap — only per-conversation limits (16 messages / 24h). */
+/** Messaging has no monthly send cap — only per-conversation limits (20 messages / 24h). */
 export async function getMonthlyMessageQuota(
   _uid: string,
   userData: Record<string, unknown>,

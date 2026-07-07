@@ -11,7 +11,6 @@ export interface DmTextAnalysis {
 
 const URL_REGEX = /\b(https?:\/\/|www\.)[^\s]+/i
 const EMAIL_REGEX = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i
-const PHONE_REGEX = /\b(?:\+?1[-.\s]?)?(?:\(\d{3}\)|\d{3})[-.\s]?\d{3}[-.\s]?\d{4}\b/
 
 const SEXUAL_SERVICES =
   /\b(escort|escorts|full service|fs\b|incall|in call|outcall|out call|gfe|pse|qv|hh|hhr|overnight|quick meet|massage outcall)\b/i
@@ -30,7 +29,7 @@ function normalizeForMatch(text: string): string {
 /**
  * Dating-app DM classifier: keyword / pattern flagging on private text.
  * - `block` — solicitation, scams (reject + suspend)
- * - `flag` — contact info, payment cues (deliver + queue for review)
+ * - `flag` — external links, email, payment cues (deliver + queue for review)
  * - `allow` — no hits
  */
 export function analyzeDmText(text: string): DmTextAnalysis {
@@ -79,10 +78,6 @@ export function analyzeDmText(text: string): DmTextAnalysis {
   if (EMAIL_REGEX.test(normalized)) {
     categories.add('contact_info')
     matches.add('email')
-  }
-  if (PHONE_REGEX.test(normalized)) {
-    categories.add('contact_info')
-    matches.add('phone')
   }
   if (PAYMENT_CUES.test(normalized)) {
     categories.add('payment_handle')
