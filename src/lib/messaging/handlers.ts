@@ -730,7 +730,7 @@ export async function archiveConversation(userId: string, conversationId: string
   if (!Array.isArray(convo.participantIds) || !convo.participantIds.includes(userId)) {
     throw new ApiError('You are not part of this conversation.', 403)
   }
-  if (!isConversationClosed(convo)) {
+  if (!isConversationClosed(convo as Record<string, unknown>)) {
     throw new ApiError('Only expired conversations can be archived.', 412, 'CONVERSATION_NOT_CLOSED')
   }
 
