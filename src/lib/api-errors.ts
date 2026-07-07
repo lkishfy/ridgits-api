@@ -18,6 +18,7 @@ export function apiErrorResponse(error: unknown): {
   retryAfterSeconds?: number
 } {
   if (error instanceof ApiError) {
+    logMissingFirestoreIndex(error.message, 'ApiError')
     return {
       message: error.message,
       status: error.status,
@@ -26,7 +27,20 @@ export function apiErrorResponse(error: unknown): {
     }
   }
   if (error instanceof Error) {
+    logMissingFirestoreIndex(error.message, error.name)
     return { message: error.message, status: 500 }
   }
   return { message: 'Unexpected error', status: 500 }
+}
+
+function logMissingFirestoreIndex(message: string, context: string) {
+  if (!/requires an index|failed_precondition/i.test(message)) return
+
+  const match = message.match(/https:\/\/console\.firebase\.google\.com[^\s\]]+/)
+  if (match) {
+    console.error(`[FirestoreIndex][${context}] Missing index — create it here: ${match[0]}`)
+    return
+  }
+
+  console.error(`[FirestoreIndex][${context}] Missing index: ${message}`)
 }

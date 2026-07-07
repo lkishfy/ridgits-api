@@ -280,7 +280,31 @@ export async function startConversation(senderId: string, toUserId: string, mess
           throw new ApiError('Conversation is awaiting approval.', 412)
         }
         if (convo.status === 'blocked') throw new ApiError('This conversation is blocked.', 403)
+        if (convo.status === 'expired' || convo.isExpired === true) {
+          throw new ApiError(
+            'This conversation has expired. Conversations are limited to 24 hours to encourage meeting in real life!',
+            412,
+          )
+        }
         if (convo.status === 'active') {
+          const expiresAt = convo.expiresAt as Timestamp | undefined
+          if (expiresAt && Timestamp.now().seconds >= expiresAt.seconds) {
+            throw new ApiError(
+              'This conversation has expired. Conversations are limited to 24 hours to encourage meeting in real life!',
+              412,
+            )
+          }
+          const messageCount = (convo.messageCount as number) ?? 0
+          const maxMessages = Math.min(
+            typeof convo.maxMessages === 'number' && convo.maxMessages > 0 ? convo.maxMessages : DEFAULT_MAX_MESSAGES,
+            DEFAULT_MAX_MESSAGES,
+          )
+          if (messageCount >= maxMessages) {
+            throw new ApiError(
+              `Message limit reached. Conversations are limited to ${maxMessages} messages to encourage meeting in real life!`,
+              412,
+            )
+          }
           throw new ApiError('Conversation already exists. Send your message in the existing thread.', 412)
         }
         if (convo.status === 'declined') {
