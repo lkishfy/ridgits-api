@@ -23,13 +23,18 @@ export async function POST(request: NextRequest) {
     const registered = await registerProfilePhotoForUser(auth.uid, imageUrl)
 
     const userSnap = await getDb().collection('users').doc(auth.uid).get()
-    if (String(userSnap.get('identityVerificationStatus') ?? '') === 'verified') {
-      if (!registered.photoChanged) {
+    const userData = userSnap.data() ?? {}
+    if (String(userData.identityVerificationStatus ?? '') === 'verified') {
+      const needsFaceMatch = requiresProfilePhotoFaceMatch(userData)
+      const matchStatus = String(userData.profilePhotoIdentityMatchStatus ?? '')
+      const needsInitialMatch = matchStatus !== 'verified' && matchStatus !== 'pending'
+
+      if (!registered.photoChanged && !needsInitialMatch) {
         return NextResponse.json({ ok: true })
       }
 
       try {
-        const identityMatch = requiresProfilePhotoFaceMatch(registered.changeCount)
+        const identityMatch = needsFaceMatch
           ? await matchProfilePhotoToIdentity(auth.uid)
           : await approveProfilePhotoWithoutFaceMatch(auth.uid)
         return NextResponse.json({ ok: true, identityMatch })

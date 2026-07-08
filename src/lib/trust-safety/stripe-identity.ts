@@ -10,7 +10,8 @@ import {
   resolveIdentityDocumentFingerprint,
 } from '@/lib/trust-safety/identity-document-safety'
 import { isRidgitsBypassEmail } from '@/lib/ridgits-bypass'
-import { matchProfilePhotoToIdentity } from '@/lib/trust-safety/profile-identity-match'
+import { matchProfilePhotoToIdentity, approveProfilePhotoWithoutFaceMatch, requiresProfilePhotoFaceMatch, isProfilePhotoIdentityVerified } from '@/lib/trust-safety/profile-identity-match'
+import { registerProfilePhotoForUser } from '@/lib/trust-safety/profile-photo'
 import {
   assertPhoneNotAlreadyClaimed,
   claimPhoneForUser,
@@ -499,7 +500,22 @@ export async function applyVerificationSessionUpdate(session: Stripe.Identity.Ve
       const profileImage = String(profileSnap.get('image') ?? '').trim()
       if (profileImage) {
         try {
-          await matchProfilePhotoToIdentity(uid)
+          const registered = await registerProfilePhotoForUser(uid, profileImage)
+          const userSnap = await getDb().collection('users').doc(uid).get()
+          const userData = userSnap.data() ?? {}
+          const alreadyPhotoVerified = isProfilePhotoIdentityVerified(
+            userData,
+            profileSnap.data(),
+          )
+          if (!registered.photoChanged && alreadyPhotoVerified) {
+            return
+          }
+
+          if (requiresProfilePhotoFaceMatch(userData)) {
+            await matchProfilePhotoToIdentity(uid)
+          } else {
+            await approveProfilePhotoWithoutFaceMatch(uid)
+          }
         } catch (error) {
           console.error('[stripe-identity] auto profile match failed after verification', uid, error)
         }

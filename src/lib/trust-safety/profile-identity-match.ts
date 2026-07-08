@@ -8,19 +8,13 @@ import {
   isRekognitionConfigured,
   secureClearBuffer,
 } from '@/lib/trust-safety/rekognition-face-compare'
-import { validateProfilePhotoUrl, hashProfilePhotoFromUrl, assertProfilePhotoNotAlreadyClaimed, claimProfilePhotoForUser, readProfilePhotoChangeCount } from '@/lib/trust-safety/profile-photo'
+import { validateProfilePhotoUrl, hashProfilePhotoFromUrl, assertProfilePhotoNotAlreadyClaimed, claimProfilePhotoForUser } from '@/lib/trust-safety/profile-photo'
 
 const DEFAULT_MATCH_THRESHOLD = 0.9
-const DEFAULT_MAX_PROFILE_PHOTO_FACE_MATCHES = 3
 
-function maxProfilePhotoFaceMatches(): number {
-  const raw = process.env.RIDGITS_MAX_PROFILE_PHOTO_FACE_MATCHES?.trim()
-  const parsed = raw ? Number(raw) : DEFAULT_MAX_PROFILE_PHOTO_FACE_MATCHES
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_MAX_PROFILE_PHOTO_FACE_MATCHES
-}
-
-export function requiresProfilePhotoFaceMatch(changeCount: number): boolean {
-  return changeCount <= maxProfilePhotoFaceMatches()
+/** True until the user passes their one-time profile photo ↔ ID selfie face match. */
+export function requiresProfilePhotoFaceMatch(userData?: Record<string, unknown> | null): boolean {
+  return String(userData?.profilePhotoIdentityMatchStatus ?? '') !== 'verified'
 }
 
 function matchThreshold(): number {
@@ -186,7 +180,7 @@ async function syncPublicProfilePhotoVerified(uid: string, verified: boolean): P
   await getDb().collection('publicProfiles').doc(uid).set({ profilePhotoVerified: verified }, { merge: true })
 }
 
-/** After the first N photo changes, trust updates without Rekognition face match. */
+/** After the one-time face match passes, later photo updates skip Rekognition. */
 export async function approveProfilePhotoWithoutFaceMatch(uid: string): Promise<ProfileIdentityMatchResult> {
   const profileSnap = await getDb().collection('publicProfiles').doc(uid).get()
   const profileImage = String(profileSnap.get('image') ?? '').trim()
@@ -221,8 +215,8 @@ export async function approveProfilePhotoWithoutFaceMatch(uid: string): Promise<
 
 export async function matchProfilePhotoToIdentity(uid: string): Promise<ProfileIdentityMatchResult> {
   const userSnap = await getDb().collection('users').doc(uid).get()
-  const changeCount = readProfilePhotoChangeCount(userSnap.data())
-  if (!requiresProfilePhotoFaceMatch(changeCount)) {
+  const userData = userSnap.data() ?? {}
+  if (!requiresProfilePhotoFaceMatch(userData)) {
     return approveProfilePhotoWithoutFaceMatch(uid)
   }
 
@@ -291,12 +285,7 @@ export async function matchProfilePhotoToIdentity(uid: string): Promise<ProfileI
 
     if (match) {
       await claimProfilePhotoForUser(uid, photoHash)
-      const changeCount = readProfilePhotoChangeCount(
-        (await getDb().collection('users').doc(uid).get()).data(),
-      )
-      if (!requiresProfilePhotoFaceMatch(changeCount)) {
-        await redactVerifiedIdentityImages(uid)
-      }
+      await redactVerifiedIdentityImages(uid)
       return { status, score, threshold }
     }
 
