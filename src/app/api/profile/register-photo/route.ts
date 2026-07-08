@@ -3,7 +3,11 @@ import { apiErrorResponse } from '@/lib/api-errors'
 import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
 import { getDb } from '@/lib/firebase-admin'
 import { registerProfilePhotoForUser } from '@/lib/trust-safety/profile-photo'
-import { matchProfilePhotoToIdentity } from '@/lib/trust-safety/profile-identity-match'
+import {
+  approveProfilePhotoWithoutFaceMatch,
+  matchProfilePhotoToIdentity,
+  requiresProfilePhotoFaceMatch,
+} from '@/lib/trust-safety/profile-identity-match'
 
 export async function POST(request: NextRequest) {
   const auth = await requireRidgitsAuth(request)
@@ -16,12 +20,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'imageUrl is required' }, { status: 400 })
     }
 
-    await registerProfilePhotoForUser(auth.uid, imageUrl)
+    const registered = await registerProfilePhotoForUser(auth.uid, imageUrl)
 
     const userSnap = await getDb().collection('users').doc(auth.uid).get()
     if (String(userSnap.get('identityVerificationStatus') ?? '') === 'verified') {
+      if (!registered.photoChanged) {
+        return NextResponse.json({ ok: true })
+      }
+
       try {
-        const identityMatch = await matchProfilePhotoToIdentity(auth.uid)
+        const identityMatch = requiresProfilePhotoFaceMatch(registered.changeCount)
+          ? await matchProfilePhotoToIdentity(auth.uid)
+          : await approveProfilePhotoWithoutFaceMatch(auth.uid)
         return NextResponse.json({ ok: true, identityMatch })
       } catch (error) {
         const { message, code } = apiErrorResponse(error)

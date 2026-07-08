@@ -8,9 +8,20 @@ import {
   isRekognitionConfigured,
   secureClearBuffer,
 } from '@/lib/trust-safety/rekognition-face-compare'
-import { validateProfilePhotoUrl, hashProfilePhotoFromUrl, assertProfilePhotoNotAlreadyClaimed, claimProfilePhotoForUser } from '@/lib/trust-safety/profile-photo'
+import { validateProfilePhotoUrl, hashProfilePhotoFromUrl, assertProfilePhotoNotAlreadyClaimed, claimProfilePhotoForUser, readProfilePhotoChangeCount } from '@/lib/trust-safety/profile-photo'
 
 const DEFAULT_MATCH_THRESHOLD = 0.9
+const DEFAULT_MAX_PROFILE_PHOTO_FACE_MATCHES = 3
+
+function maxProfilePhotoFaceMatches(): number {
+  const raw = process.env.RIDGITS_MAX_PROFILE_PHOTO_FACE_MATCHES?.trim()
+  const parsed = raw ? Number(raw) : DEFAULT_MAX_PROFILE_PHOTO_FACE_MATCHES
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_MAX_PROFILE_PHOTO_FACE_MATCHES
+}
+
+export function requiresProfilePhotoFaceMatch(changeCount: number): boolean {
+  return changeCount <= maxProfilePhotoFaceMatches()
+}
 
 function matchThreshold(): number {
   const raw = process.env.RIDGITS_IDENTITY_FACE_MATCH_THRESHOLD?.trim()
@@ -110,6 +121,7 @@ export interface ProfileIdentityMatchResult {
   threshold: number
   message?: string
   reason?: ProfilePhotoMatchFailureReason
+  skippedFaceMatch?: boolean
 }
 
 export type ProfilePhotoMatchFailureReason =
@@ -174,7 +186,46 @@ async function syncPublicProfilePhotoVerified(uid: string, verified: boolean): P
   await getDb().collection('publicProfiles').doc(uid).set({ profilePhotoVerified: verified }, { merge: true })
 }
 
+/** After the first N photo changes, trust updates without Rekognition face match. */
+export async function approveProfilePhotoWithoutFaceMatch(uid: string): Promise<ProfileIdentityMatchResult> {
+  const profileSnap = await getDb().collection('publicProfiles').doc(uid).get()
+  const profileImage = String(profileSnap.get('image') ?? '').trim()
+
+  const photoCheck = await validateProfilePhotoUrl(profileImage)
+  if (!photoCheck.ok) {
+    throw new ApiError(photoCheck.reason ?? 'A valid profile photo is required.', 412, 'INVALID_PROFILE_PHOTO')
+  }
+
+  const photoHash = await hashProfilePhotoFromUrl(profileImage)
+  await assertProfilePhotoNotAlreadyClaimed(photoHash, uid)
+  await claimProfilePhotoForUser(uid, photoHash)
+
+  const threshold = matchThreshold()
+  await getDb().collection('users').doc(uid).set(
+    {
+      profilePhotoIdentityMatchStatus: 'verified',
+      profilePhotoIdentityMatchAt: FieldValue.serverTimestamp(),
+      profilePhotoIdentityMatchScore: FieldValue.delete(),
+    },
+    { merge: true },
+  )
+  await syncPublicProfilePhotoVerified(uid, true)
+
+  return {
+    status: 'verified',
+    score: null,
+    threshold,
+    skippedFaceMatch: true,
+  }
+}
+
 export async function matchProfilePhotoToIdentity(uid: string): Promise<ProfileIdentityMatchResult> {
+  const userSnap = await getDb().collection('users').doc(uid).get()
+  const changeCount = readProfilePhotoChangeCount(userSnap.data())
+  if (!requiresProfilePhotoFaceMatch(changeCount)) {
+    return approveProfilePhotoWithoutFaceMatch(uid)
+  }
+
   if (!isRekognitionConfigured()) {
     throw new ApiError('Face match is not configured.', 503, 'FACE_MATCH_UNAVAILABLE')
   }
@@ -240,7 +291,12 @@ export async function matchProfilePhotoToIdentity(uid: string): Promise<ProfileI
 
     if (match) {
       await claimProfilePhotoForUser(uid, photoHash)
-      await redactVerifiedIdentityImages(uid)
+      const changeCount = readProfilePhotoChangeCount(
+        (await getDb().collection('users').doc(uid).get()).data(),
+      )
+      if (!requiresProfilePhotoFaceMatch(changeCount)) {
+        await redactVerifiedIdentityImages(uid)
+      }
       return { status, score, threshold }
     }
 
