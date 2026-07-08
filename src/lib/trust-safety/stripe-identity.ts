@@ -2,7 +2,7 @@ import { FieldValue } from 'firebase-admin/firestore'
 import type Stripe from 'stripe'
 import { ApiError } from '@/lib/api-errors'
 import { getDb } from '@/lib/firebase-admin'
-import { getStripe, isStripeConfigured } from '@/lib/stripe-client'
+import { getStripe, getStripeIdentityRestricted, isStripeConfigured, isStripeIdentityRestrictedConfigured } from '@/lib/stripe-client'
 import { hasActiveSubscriptionAccess } from '@/lib/ridgits-subscription'
 import {
   assertIdentityDocumentNotAlreadyClaimed,
@@ -427,9 +427,12 @@ export async function applyVerificationSessionUpdate(session: Stripe.Identity.Ve
 
   if (session.status === 'verified') {
     const stripe = getStripe()
+    const identityStripe = isStripeIdentityRestrictedConfigured()
+      ? getStripeIdentityRestricted()
+      : stripe
     let allowVerified = true
 
-    const documentHash = await resolveIdentityDocumentFingerprint(stripe, session)
+    const documentHash = await resolveIdentityDocumentFingerprint(identityStripe, session)
     if (documentHash) {
       try {
         await assertIdentityDocumentNotAlreadyClaimed(documentHash, uid)

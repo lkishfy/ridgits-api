@@ -1,7 +1,12 @@
 import { FieldValue } from 'firebase-admin/firestore'
 import { ApiError } from '@/lib/api-errors'
 import { getDb } from '@/lib/firebase-admin'
-import { getStripe, isStripeConfigured } from '@/lib/stripe-client'
+import {
+  getStripe,
+  getStripeIdentityRestricted,
+  isStripeConfigured,
+  isStripeIdentityRestrictedConfigured,
+} from '@/lib/stripe-client'
 import {
   compareFacesWithRekognition,
   downloadImageBytes,
@@ -23,8 +28,29 @@ function matchThreshold(): number {
   return Number.isFinite(parsed) && parsed > 0 && parsed <= 1 ? parsed : DEFAULT_MATCH_THRESHOLD
 }
 
+function isStripeSensitiveVerificationError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? '')
+  return message.includes('sensitive verification results')
+    || message.includes('restricted API key')
+}
+
+function throwIdentitySelfieAccessError(error?: unknown): never {
+  if (error && isStripeSensitiveVerificationError(error)) {
+    console.error('[profile-identity-match] Stripe restricted key required for selfie access', error)
+  }
+  throw new ApiError(
+    'Profile photo verification is temporarily unavailable. Try again in a few minutes.',
+    503,
+    'IDENTITY_SELFIE_UNAVAILABLE',
+  )
+}
+
 async function createTemporarySelfieUrl(selfieFileId: string): Promise<string> {
-  const stripe = getStripe()
+  if (!isStripeIdentityRestrictedConfigured()) {
+    throwIdentitySelfieAccessError()
+  }
+
+  const stripe = getStripeIdentityRestricted()
   const fileLink = await stripe.fileLinks.create({
     file: selfieFileId,
     expires_at: Math.floor(Date.now() / 1000) + 30,
@@ -58,23 +84,43 @@ async function resolveVerifiedSelfieFileId(uid: string): Promise<string> {
     throw new ApiError('No verified identity session found.', 412, 'IDENTITY_VERIFICATION_REQUIRED')
   }
 
-  const stripe = getStripe()
-  const session = await stripe.identity.verificationSessions.retrieve(sessionId)
+  if (!isStripeIdentityRestrictedConfigured()) {
+    throwIdentitySelfieAccessError()
+  }
+
+  const stripe = getStripeIdentityRestricted()
+  let session: Awaited<ReturnType<typeof stripe.identity.verificationSessions.retrieve>>
+  try {
+    session = await stripe.identity.verificationSessions.retrieve(sessionId, {
+      expand: ['last_verification_report'],
+    })
+  } catch (error) {
+    if (isStripeSensitiveVerificationError(error)) {
+      throwIdentitySelfieAccessError(error)
+    }
+    throw error
+  }
+
   if (session.status !== 'verified') {
     throw new ApiError('Identity verification is not complete.', 412, 'IDENTITY_VERIFICATION_REQUIRED')
   }
 
-  const reportId =
-    typeof session.last_verification_report === 'string'
-      ? session.last_verification_report
-      : session.last_verification_report?.id
-
-  if (!reportId) {
-    throw new ApiError('Verified identity report is unavailable.', 502, 'IDENTITY_SELFIE_UNAVAILABLE')
+  let report = session.last_verification_report
+  if (typeof report === 'string' && report.trim()) {
+    try {
+      report = await stripe.identity.verificationReports.retrieve(report.trim())
+    } catch (error) {
+      if (isStripeSensitiveVerificationError(error)) {
+        throwIdentitySelfieAccessError(error)
+      }
+      throw error
+    }
   }
 
-  const report = await stripe.identity.verificationReports.retrieve(reportId)
-  const selfieFileId = report.selfie?.selfie
+  const selfieFileId =
+    report && typeof report === 'object' && 'selfie' in report
+      ? (report as { selfie?: { selfie?: string | null } }).selfie?.selfie
+      : null
   if (!selfieFileId) {
     throw new ApiError('Verified selfie is unavailable.', 502, 'IDENTITY_SELFIE_UNAVAILABLE')
   }
@@ -95,7 +141,9 @@ async function redactVerifiedIdentityImages(uid: string): Promise<void> {
   if (!sessionId || !isStripeConfigured()) return
 
   try {
-    const stripe = getStripe()
+    const stripe = isStripeIdentityRestrictedConfigured()
+      ? getStripeIdentityRestricted()
+      : getStripe()
     await stripe.identity.verificationSessions.redact(sessionId)
     await getDb().collection('users').doc(uid).set(
       {
