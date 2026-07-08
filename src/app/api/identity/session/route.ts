@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
 
     const session = await createIdentityVerificationSession(auth.uid, {
       phone: typeof body.phone === 'string' ? body.phone : undefined,
-    })
+    }, auth.email)
     return NextResponse.json({
       verificationUrl: session.url,
       sessionId: session.sessionId,

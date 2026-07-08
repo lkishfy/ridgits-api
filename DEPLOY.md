@@ -51,6 +51,10 @@ AWS_ACCESS_KEY_ID=AKIA...
 AWS_SECRET_ACCESS_KEY=...
 AWS_REGION=us-east-1
 RIDGITS_IDENTITY_FACE_MATCH_THRESHOLD=0.90
+STRIPE_IDENTITY_RESTRICTED_KEY=rk_...
+# Comma-separated account emails for users you manually verified in Stripe Dashboard
+# (bypasses automated profile photo ↔ ID selfie match).
+RIDGITS_MANUAL_PHOTO_VERIFIED_EMAILS=
 # Optional: keep Sightengine for NSFW profile moderation only.
 SIGHTENGINE_API_USER=...
 SIGHTENGINE_API_SECRET=...
@@ -77,6 +81,14 @@ Create an IAM user (or role) used only by `ridgits-api` with this policy:
 ```
 
 Generate access keys for that user and add them to Vercel as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Use the same region you enabled Rekognition in (e.g. `us-east-1`).
+
+### Profile photo before identity verification
+
+Users must upload a profile photo **before** starting Stripe Identity (`PROFILE_PHOTO_REQUIRED` if missing). After ID verification, the one-time face match must run within Stripe's **48-hour** selfie access window (or use the manual allowlist below).
+
+### Manual photo verification allowlist
+
+When automated face match fails (e.g. user waited >48 hours), compare their profile photo to the ID selfie in the Stripe Identity Dashboard, then add their **account email** to `RIDGITS_MANUAL_PHOTO_VERIFIED_EMAILS` in Vercel (comma-separated). Redeploy is required. The user can message immediately; tapping "Retry photo verification" will persist `verified` to Firestore.
 
 ## 5. Ridgits iOS
 

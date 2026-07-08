@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
 
       try {
         const identityMatch = needsFaceMatch
-          ? await matchProfilePhotoToIdentity(auth.uid)
+          ? await matchProfilePhotoToIdentity(auth.uid, auth.email)
           : await approveProfilePhotoWithoutFaceMatch(auth.uid)
         return NextResponse.json({ ok: true, identityMatch })
       } catch (error) {

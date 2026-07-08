@@ -10,6 +10,8 @@ import {
   resolveIdentityDocumentFingerprint,
 } from '@/lib/trust-safety/identity-document-safety'
 import { isRidgitsBypassEmail } from '@/lib/ridgits-bypass'
+import { isManualProfilePhotoVerified, isManualProfilePhotoVerifiedForUser } from '@/lib/ridgits-manual-verification'
+import { validateProfilePhotoUrl } from '@/lib/trust-safety/profile-photo'
 import { matchProfilePhotoToIdentity, approveProfilePhotoWithoutFaceMatch, requiresProfilePhotoFaceMatch, isProfilePhotoIdentityVerified } from '@/lib/trust-safety/profile-identity-match'
 import { registerProfilePhotoForUser } from '@/lib/trust-safety/profile-photo'
 import {
@@ -206,7 +208,10 @@ async function syncIdentityStatusFromStripeIfNeeded(
   return bestData
 }
 
-export async function getIdentityStatus(uid: string): Promise<IdentityStatusPayload> {
+export async function getIdentityStatus(
+  uid: string,
+  email?: string | null,
+): Promise<IdentityStatusPayload> {
   const snap = await getDb().collection('users').doc(uid).get()
   const data = await syncIdentityStatusFromStripeIfNeeded(uid, snap.data() ?? {})
 
@@ -217,14 +222,15 @@ export async function getIdentityStatus(uid: string): Promise<IdentityStatusPayl
 
   const identityOk = identityVerificationStatus === 'verified'
   const phoneOk = !identityRequiresPhoneVerification() || phoneVerificationStatus === 'verified'
-  const photoOk = profilePhotoIdentityMatchStatus === 'verified'
+  const manualPhotoBypass = await isManualProfilePhotoVerifiedForUser(uid, email)
+  const photoOk = manualPhotoBypass || profilePhotoIdentityMatchStatus === 'verified'
 
   return {
     identityVerificationStatus,
     identityVerifiedAt: timestampToIso(data.identityVerifiedAt),
     phoneVerificationStatus,
     phoneVerifiedAt: timestampToIso(data.phoneVerifiedAt),
-    profilePhotoIdentityMatchStatus,
+    profilePhotoIdentityMatchStatus: manualPhotoBypass ? 'verified' : profilePhotoIdentityMatchStatus,
     profilePhotoIdentityMatchAt: timestampToIso(data.profilePhotoIdentityMatchAt),
     profilePhotoIdentityMatchScore:
       typeof data.profilePhotoIdentityMatchScore === 'number' ? data.profilePhotoIdentityMatchScore : null,
@@ -235,7 +241,29 @@ export async function getIdentityStatus(uid: string): Promise<IdentityStatusPayl
 
 export async function requireIdentityVerified(uid: string, email?: string | null): Promise<void> {
   if (isRidgitsBypassEmail(email)) return
-  const status = await getIdentityStatus(uid)
+  if (isManualProfilePhotoVerified(email)) {
+    const snap = await getDb().collection('users').doc(uid).get()
+    const identityStatus = String(snap.get('identityVerificationStatus') ?? '')
+    if (identityStatus !== 'verified') {
+      throw new ApiError(
+        'Identity verification required before messaging.',
+        403,
+        'IDENTITY_VERIFICATION_REQUIRED',
+      )
+    }
+    if (identityRequiresPhoneVerification()) {
+      const phoneStatus = String(snap.get('phoneVerificationStatus') ?? '')
+      if (phoneStatus !== 'verified') {
+        throw new ApiError(
+          'Phone verification required before messaging.',
+          403,
+          'PHONE_VERIFICATION_REQUIRED',
+        )
+      }
+    }
+    return
+  }
+  const status = await getIdentityStatus(uid, email)
   if (status.identityVerificationStatus !== 'verified') {
     throw new ApiError(
       'Identity verification required before messaging.',
@@ -261,7 +289,12 @@ export async function requireIdentityVerified(uid: string, email?: string | null
   }
 }
 
-export async function requireProfilePhotoIdentityMatch(uid: string): Promise<void> {
+export async function requireProfilePhotoIdentityMatch(
+  uid: string,
+  email?: string | null,
+): Promise<void> {
+  if (await isManualProfilePhotoVerifiedForUser(uid, email)) return
+
   const snap = await getDb().collection('users').doc(uid).get()
   const identityStatus = String(snap.get('identityVerificationStatus') ?? '')
   if (identityStatus !== 'verified') {
@@ -296,6 +329,7 @@ export async function requireProfilePhotoIdentityMatch(uid: string): Promise<voi
 export async function createIdentityVerificationSession(
   uid: string,
   input?: { phone?: string },
+  email?: string | null,
 ): Promise<{ url: string; sessionId: string }> {
   if (!isStripeConfigured()) {
     throw new ApiError('Identity verification is not configured.', 503, 'IDENTITY_UNAVAILABLE')
@@ -314,7 +348,20 @@ export async function createIdentityVerificationSession(
 
   await requireUserBirthYearOnFile(uid)
 
-  const currentStatus = await getIdentityStatus(uid)
+  if (!(await isManualProfilePhotoVerifiedForUser(uid, email))) {
+    const profileSnap = await getDb().collection('publicProfiles').doc(uid).get()
+    const profileImage = String(profileSnap.get('image') ?? '').trim()
+    const photoCheck = await validateProfilePhotoUrl(profileImage)
+    if (!photoCheck.ok) {
+      throw new ApiError(
+        'Add a profile photo before starting identity verification. Your photo must match your ID selfie within 48 hours of verifying.',
+        412,
+        'PROFILE_PHOTO_REQUIRED',
+      )
+    }
+  }
+
+  const currentStatus = await getIdentityStatus(uid, email)
   if (currentStatus.identityVerificationStatus === 'verified') {
     const phoneOk =
       !identityRequiresPhoneVerification() || currentStatus.phoneVerificationStatus === 'verified'
@@ -331,7 +378,7 @@ export async function createIdentityVerificationSession(
       const existing = await retrieveSessionWithDetails(stripe, existingSessionId)
       if (existing.status === 'verified') {
         await applyVerificationSessionUpdate(existing)
-        const after = await getIdentityStatus(uid)
+        const after = await getIdentityStatus(uid, email)
         const phoneOk =
           !identityRequiresPhoneVerification() || after.phoneVerificationStatus === 'verified'
         if (phoneOk) {

@@ -8,7 +8,7 @@ export async function GET(request: NextRequest) {
   if (isNextResponse(auth)) return auth
 
   try {
-    const status = await getIdentityStatus(auth.uid)
+    const status = await getIdentityStatus(auth.uid, auth.email)
     return NextResponse.json(status)
   } catch (error) {
     const { message, status, code } = apiErrorResponse(error)

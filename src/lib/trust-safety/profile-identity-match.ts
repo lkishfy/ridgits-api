@@ -14,6 +14,12 @@ import {
   secureClearBuffer,
 } from '@/lib/trust-safety/rekognition-face-compare'
 import { validateProfilePhotoUrl, hashProfilePhotoFromUrl, assertProfilePhotoNotAlreadyClaimed, claimProfilePhotoForUser } from '@/lib/trust-safety/profile-photo'
+import { isManualProfilePhotoVerifiedForUser } from '@/lib/ridgits-manual-verification'
+import {
+  customerFacingSupportMessage,
+  isStripeSensitiveVerificationError,
+  sanitizeCustomerFacingMessage,
+} from '@/lib/customer-facing-errors'
 
 const DEFAULT_MATCH_THRESHOLD = 0.9
 
@@ -28,18 +34,12 @@ function matchThreshold(): number {
   return Number.isFinite(parsed) && parsed > 0 && parsed <= 1 ? parsed : DEFAULT_MATCH_THRESHOLD
 }
 
-function isStripeSensitiveVerificationError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error ?? '')
-  return message.includes('sensitive verification results')
-    || message.includes('restricted API key')
-}
-
 function throwIdentitySelfieAccessError(error?: unknown): never {
   if (error && isStripeSensitiveVerificationError(error)) {
-    console.error('[profile-identity-match] Stripe restricted key required for selfie access', error)
+    console.error('[profile-identity-match] selfie access failed', error)
   }
   throw new ApiError(
-    'Profile photo verification is temporarily unavailable. Try again in a few minutes.',
+    customerFacingSupportMessage("We couldn't verify your profile photo against your ID."),
     503,
     'IDENTITY_SELFIE_UNAVAILABLE',
   )
@@ -51,12 +51,24 @@ async function createTemporarySelfieUrl(selfieFileId: string): Promise<string> {
   }
 
   const stripe = getStripeIdentityRestricted()
-  const fileLink = await stripe.fileLinks.create({
-    file: selfieFileId,
-    expires_at: Math.floor(Date.now() / 1000) + 30,
-  })
+  let fileLink: Awaited<ReturnType<typeof stripe.fileLinks.create>>
+  try {
+    fileLink = await stripe.fileLinks.create({
+      file: selfieFileId,
+      expires_at: Math.floor(Date.now() / 1000) + 30,
+    })
+  } catch (error) {
+    if (isStripeSensitiveVerificationError(error)) {
+      throwIdentitySelfieAccessError(error)
+    }
+    throw error
+  }
   if (!fileLink.url) {
-    throw new ApiError('Could not access verified selfie for comparison.', 502, 'IDENTITY_SELFIE_UNAVAILABLE')
+    throw new ApiError(
+      customerFacingSupportMessage("We couldn't verify your profile photo against your ID."),
+      502,
+      'IDENTITY_SELFIE_UNAVAILABLE',
+    )
   }
   return fileLink.url
 }
@@ -122,7 +134,11 @@ async function resolveVerifiedSelfieFileId(uid: string): Promise<string> {
       ? (report as { selfie?: { selfie?: string | null } }).selfie?.selfie
       : null
   if (!selfieFileId) {
-    throw new ApiError('Verified selfie is unavailable.', 502, 'IDENTITY_SELFIE_UNAVAILABLE')
+    throw new ApiError(
+      customerFacingSupportMessage("We couldn't verify your profile photo against your ID."),
+      502,
+      'IDENTITY_SELFIE_UNAVAILABLE',
+    )
   }
 
   return selfieFileId
@@ -196,7 +212,7 @@ export function buildFailedProfilePhotoMatchMessage(
     case 'DOWNLOAD_FAILED':
       return 'We could not download your profile photo for verification. Save your profile and try again.'
     case 'UNAVAILABLE':
-      return 'Profile photo verification is temporarily unavailable. Try again in a few minutes.'
+      return customerFacingSupportMessage("We couldn't verify your profile photo against your ID.")
     case 'LOW_SIMILARITY': {
       const scorePct = score == null ? null : formatPercent(score)
       if (scorePct != null && scorePct > 0) {
@@ -261,7 +277,14 @@ export async function approveProfilePhotoWithoutFaceMatch(uid: string): Promise<
   }
 }
 
-export async function matchProfilePhotoToIdentity(uid: string): Promise<ProfileIdentityMatchResult> {
+export async function matchProfilePhotoToIdentity(
+  uid: string,
+  email?: string | null,
+): Promise<ProfileIdentityMatchResult> {
+  if (await isManualProfilePhotoVerifiedForUser(uid, email)) {
+    return approveProfilePhotoWithoutFaceMatch(uid)
+  }
+
   const userSnap = await getDb().collection('users').doc(uid).get()
   const userData = userSnap.data() ?? {}
   if (!requiresProfilePhotoFaceMatch(userData)) {
@@ -269,7 +292,11 @@ export async function matchProfilePhotoToIdentity(uid: string): Promise<ProfileI
   }
 
   if (!isRekognitionConfigured()) {
-    throw new ApiError('Face match is not configured.', 503, 'FACE_MATCH_UNAVAILABLE')
+    throw new ApiError(
+      customerFacingSupportMessage('Profile photo verification is not available right now.'),
+      503,
+      'FACE_MATCH_UNAVAILABLE',
+    )
   }
 
   const profileSnap = await getDb().collection('publicProfiles').doc(uid).get()
@@ -305,7 +332,7 @@ export async function matchProfilePhotoToIdentity(uid: string): Promise<ProfileI
       }),
       downloadImageBytes(selfieUrl).catch(() => {
         throw new ApiError(
-          'We could not download your verified ID selfie for comparison. Try again in a few minutes.',
+          customerFacingSupportMessage("We couldn't verify your profile photo against your ID."),
           502,
           'IDENTITY_SELFIE_UNAVAILABLE',
         )
@@ -338,12 +365,13 @@ export async function matchProfilePhotoToIdentity(uid: string): Promise<ProfileI
     }
 
     const reason = failureReason ?? (score > 0 ? 'LOW_SIMILARITY' : 'NO_MATCH')
+    const message = buildFailedProfilePhotoMatchMessage(score, threshold, reason)
     return {
       status,
       score,
       threshold,
       reason,
-      message: buildFailedProfilePhotoMatchMessage(score, threshold, reason),
+      message: sanitizeCustomerFacingMessage(message),
     }
   } finally {
     secureClearBuffer(profileBytes)

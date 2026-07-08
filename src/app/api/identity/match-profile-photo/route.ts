@@ -8,7 +8,7 @@ export async function POST(request: NextRequest) {
   if (isNextResponse(auth)) return auth
 
   try {
-    const result = await matchProfilePhotoToIdentity(auth.uid)
+    const result = await matchProfilePhotoToIdentity(auth.uid, auth.email)
     return NextResponse.json(result)
   } catch (error) {
     const { message, status, code } = apiErrorResponse(error)

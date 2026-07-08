@@ -1,3 +1,7 @@
+import {
+  sanitizeCustomerFacingMessage,
+} from '@/lib/customer-facing-errors'
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -20,7 +24,7 @@ export function apiErrorResponse(error: unknown): {
   if (error instanceof ApiError) {
     logMissingFirestoreIndex(error.message, 'ApiError')
     return {
-      message: error.message,
+      message: sanitizeCustomerFacingMessage(error.message, error.code),
       status: error.status,
       code: error.code,
       retryAfterSeconds: error.retryAfterSeconds,
@@ -28,9 +32,12 @@ export function apiErrorResponse(error: unknown): {
   }
   if (error instanceof Error) {
     logMissingFirestoreIndex(error.message, error.name)
-    return { message: error.message, status: 500 }
+    return {
+      message: sanitizeCustomerFacingMessage(error.message),
+      status: 500,
+    }
   }
-  return { message: 'Unexpected error', status: 500 }
+  return { message: sanitizeCustomerFacingMessage('Unexpected error'), status: 500 }
 }
 
 function logMissingFirestoreIndex(message: string, context: string) {
