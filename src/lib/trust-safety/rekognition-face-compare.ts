@@ -59,16 +59,19 @@ function rekognitionErrorMessage(error: unknown): string {
   if (error && typeof error === 'object' && 'name' in error) {
     const name = String((error as { name?: string }).name ?? '')
     if (name === 'InvalidParameterException') {
-      return 'Could not detect a face in one of the photos. Use a clear photo of your face.'
+      return 'We could not detect a face in one of the photos. Use a clear, front-facing photo with only your face visible.'
     }
     if (name === 'ImageTooLargeException') {
-      return 'Image is too large for face comparison.'
+      return 'Your profile photo is too large to verify. Choose a smaller image under 5 MB.'
     }
     if (name === 'AccessDeniedException') {
-      return 'Face comparison is not configured correctly.'
+      return 'Profile photo verification is temporarily unavailable. Try again in a few minutes.'
+    }
+    if (name === 'ProvisionedThroughputExceededException' || name === 'ThrottlingException') {
+      return 'Photo verification is busy right now. Wait a moment and try again.'
     }
   }
-  return 'Face comparison failed.'
+  return 'Photo verification failed. Try again with a clear, front-facing photo of your face.'
 }
 
 /**
@@ -79,7 +82,11 @@ export async function compareFacesWithRekognition(
   sourceBytes: Buffer,
   targetBytes: Buffer,
   similarityThreshold: number,
-): Promise<{ match: boolean; score: number }> {
+): Promise<{
+  match: boolean
+  score: number
+  failureReason?: 'LOW_SIMILARITY' | 'NO_MATCH' | 'NO_FACE_IN_PROFILE_PHOTO' | 'NO_FACE_IN_ID_SELFIE'
+}> {
   const rekognition = getRekognitionClient()
   const thresholdPercent = Math.max(0, Math.min(100, similarityThreshold * 100))
 
@@ -99,7 +106,7 @@ export async function compareFacesWithRekognition(
 
     if (similarityPercent === 0 && !response.SourceImageFace) {
       throw new ApiError(
-        'Could not detect a face in your profile photo. Use a clear photo of your face.',
+        'We could not detect a face in your profile photo. Use a clear, front-facing photo with only your face visible.',
         412,
         'FACE_MATCH_FAILED',
       )
@@ -107,10 +114,16 @@ export async function compareFacesWithRekognition(
 
     if (similarityPercent === 0 && (response.UnmatchedFaces?.length ?? 0) === 0) {
       throw new ApiError(
-        'Could not detect a face in your verified ID selfie.',
+        'We could not detect a face in your verified ID selfie. Complete identity verification again, then retry.',
         412,
         'FACE_MATCH_FAILED',
       )
+    }
+
+    if (!match) {
+      const failureReason =
+        score > 0 ? 'LOW_SIMILARITY' : response.SourceImageFace ? 'NO_MATCH' : 'NO_FACE_IN_PROFILE_PHOTO'
+      return { match, score, failureReason }
     }
 
     return { match, score }

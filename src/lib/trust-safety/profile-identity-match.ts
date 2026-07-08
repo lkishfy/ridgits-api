@@ -108,6 +108,58 @@ export interface ProfileIdentityMatchResult {
   status: 'verified' | 'failed'
   score: number | null
   threshold: number
+  message?: string
+  reason?: ProfilePhotoMatchFailureReason
+}
+
+export type ProfilePhotoMatchFailureReason =
+  | 'LOW_SIMILARITY'
+  | 'NO_MATCH'
+  | 'NO_FACE_IN_PROFILE_PHOTO'
+  | 'NO_FACE_IN_ID_SELFIE'
+  | 'IMAGE_TOO_LARGE'
+  | 'DOWNLOAD_FAILED'
+  | 'UNAVAILABLE'
+
+function formatPercent(value: number): number {
+  return Math.round(value * 100)
+}
+
+export function buildFailedProfilePhotoMatchMessage(
+  score: number | null,
+  threshold: number,
+  reason?: ProfilePhotoMatchFailureReason,
+): string {
+  const thresholdPct = formatPercent(threshold)
+
+  switch (reason) {
+    case 'NO_FACE_IN_PROFILE_PHOTO':
+      return 'We could not detect a face in your profile photo. Use a clear, front-facing photo with only your face visible.'
+    case 'NO_FACE_IN_ID_SELFIE':
+      return 'We could not access a clear face from your verified ID selfie. Complete identity verification again, then retry.'
+    case 'IMAGE_TOO_LARGE':
+      return 'Your profile photo is too large to verify. Choose a smaller image under 5 MB.'
+    case 'DOWNLOAD_FAILED':
+      return 'We could not download your profile photo for verification. Save your profile and try again.'
+    case 'UNAVAILABLE':
+      return 'Profile photo verification is temporarily unavailable. Try again in a few minutes.'
+    case 'LOW_SIMILARITY': {
+      const scorePct = score == null ? null : formatPercent(score)
+      if (scorePct != null && scorePct > 0) {
+        return `Your profile photo only matched your ID selfie at ${scorePct}% (we require at least ${thresholdPct}%). Use a clearer, front-facing photo similar to your verification selfie.`
+      }
+      break
+    }
+    default:
+      break
+  }
+
+  const scorePct = score == null ? null : formatPercent(score)
+  if (scorePct != null && scorePct > 0) {
+    return `Your profile photo only matched your ID selfie at ${scorePct}% (we require at least ${thresholdPct}%). Use a clearer, front-facing photo similar to your verification selfie.`
+  }
+
+  return 'Your profile photo did not match your verified ID selfie. Use a clear photo of your face, similar to your ID verification selfie, then try again.'
 }
 
 export function isProfilePhotoIdentityVerified(
@@ -151,12 +203,28 @@ export async function matchProfilePhotoToIdentity(uid: string): Promise<ProfileI
 
   try {
     ;[profileBytes, selfieBytes] = await Promise.all([
-      downloadImageBytes(profileImage),
-      downloadImageBytes(selfieUrl),
+      downloadImageBytes(profileImage).catch(() => {
+        throw new ApiError(
+          'We could not download your profile photo for verification. Save your profile and try again.',
+          412,
+          'INVALID_PROFILE_PHOTO',
+        )
+      }),
+      downloadImageBytes(selfieUrl).catch(() => {
+        throw new ApiError(
+          'We could not download your verified ID selfie for comparison. Try again in a few minutes.',
+          502,
+          'IDENTITY_SELFIE_UNAVAILABLE',
+        )
+      }),
     ])
 
     const threshold = matchThreshold()
-    const { match, score } = await compareFacesWithRekognition(profileBytes, selfieBytes, threshold)
+    const { match, score, failureReason } = await compareFacesWithRekognition(
+      profileBytes,
+      selfieBytes,
+      threshold,
+    )
     const status = match ? 'verified' : 'failed'
 
     await getDb().collection('users').doc(uid).set(
@@ -173,9 +241,17 @@ export async function matchProfilePhotoToIdentity(uid: string): Promise<ProfileI
     if (match) {
       await claimProfilePhotoForUser(uid, photoHash)
       await redactVerifiedIdentityImages(uid)
+      return { status, score, threshold }
     }
 
-    return { status, score, threshold }
+    const reason = failureReason ?? (score > 0 ? 'LOW_SIMILARITY' : 'NO_MATCH')
+    return {
+      status,
+      score,
+      threshold,
+      reason,
+      message: buildFailedProfilePhotoMatchMessage(score, threshold, reason),
+    }
   } finally {
     secureClearBuffer(profileBytes)
     secureClearBuffer(selfieBytes)
