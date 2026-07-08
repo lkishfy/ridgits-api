@@ -6,6 +6,24 @@ import { getDb } from '@/lib/firebase-admin'
 const PROFILE_PHOTO_HASH_SALT =
   process.env.RIDGITS_PROFILE_PHOTO_HASH_SALT ?? 'ridgits-profile-photo-salt-v1'
 
+export interface RegisterProfilePhotoResult {
+  photoHash: string
+  photoChanged: boolean
+  changeCount: number
+}
+
+export function readProfilePhotoChangeCount(userData?: Record<string, unknown> | null): number {
+  const raw = userData?.profilePhotoChangeCount
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return Math.max(0, Math.floor(raw))
+  }
+  // Legacy users who already passed face match count as one completed photo change.
+  if (String(userData?.profilePhotoIdentityMatchStatus ?? '') === 'verified') {
+    return 1
+  }
+  return 0
+}
+
 export interface PhotoValidationResult {
   ok: boolean
   reason?: string
@@ -103,11 +121,33 @@ export async function claimProfilePhotoForUser(uid: string, photoHash: string): 
 }
 
 /** Validates URL, hashes image bytes, and claims the photo for this user. */
-export async function registerProfilePhotoForUser(uid: string, imageUrl: string): Promise<void> {
+export async function registerProfilePhotoForUser(
+  uid: string,
+  imageUrl: string,
+): Promise<RegisterProfilePhotoResult> {
   await requireValidProfilePhoto(imageUrl)
   const photoHash = await hashProfilePhotoFromUrl(imageUrl)
   await assertProfilePhotoNotAlreadyClaimed(photoHash, uid)
+
+  const userSnap = await getDb().collection('users').doc(uid).get()
+  const userData = userSnap.data() ?? {}
+  const previousHash = String(userData.profilePhotoHash ?? '').trim()
+  const photoChanged = previousHash !== photoHash
+  let changeCount = readProfilePhotoChangeCount(userData)
+
+  if (photoChanged) {
+    changeCount += 1
+  }
+
   await claimProfilePhotoForUser(uid, photoHash)
+  if (photoChanged) {
+    await getDb().collection('users').doc(uid).set(
+      { profilePhotoChangeCount: changeCount },
+      { merge: true },
+    )
+  }
+
+  return { photoHash, photoChanged, changeCount }
 }
 
 export interface ModerationResult {
