@@ -20,6 +20,7 @@ import { isProfileInUnitedStates } from '@/lib/location/normalize'
 import { normalizeQuizProgress, syncQuizProgressForMatching, getMatchingEligibleQuizDocs, isQuizCompleteForMatching } from '@/lib/matching/quiz-normalize'
 import { effectiveSubscriptionTier } from '@/lib/subscription-badge'
 import { isProfilePhotoIdentityVerified } from '@/lib/trust-safety/profile-identity-match'
+import { getVerifiedEmailMap } from '@/lib/trust-safety/email-verification'
 import { clampMatchAgeRangeMin } from '@/lib/trust-safety/age'
 
 export const NATIONWIDE_CACHE_TTL_MS = 24 * 60 * 60 * 1000
@@ -48,10 +49,15 @@ function resolveNationwideDistanceMiles(
 async function validateNationwideMatches(matches: Record<string, unknown>[]) {
   const db = getDb()
   const valid: Record<string, unknown>[] = []
+  const userIds = matches
+    .map((match) => String(match.userId ?? '').trim())
+    .filter(Boolean)
+  const verifiedMap = await getVerifiedEmailMap(userIds)
 
   for (const match of matches) {
     const userId = String(match.userId ?? '').trim()
     if (!userId) continue
+    if (verifiedMap.get(userId) !== true) continue
 
     const [publicProfileSnap, userSnap] = await Promise.all([
       db.collection('publicProfiles').doc(userId).get(),

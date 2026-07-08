@@ -5,6 +5,7 @@ import { getDb } from '@/lib/firebase-admin'
 import { isVisibleInCommunity } from '@/lib/matching/compatibility'
 import { requireAccountCooldownElapsed } from '@/lib/trust-safety/account-age'
 import { requireUserBirthYearOnFile } from '@/lib/trust-safety/age'
+import { requireVerifiedEmail } from '@/lib/trust-safety/email-verification'
 import { validateProfilePhotoUrl } from '@/lib/trust-safety/profile-photo'
 import { getPokeCreditBalance, reservePokeCreditWithTransaction } from '@/lib/pokes/poke-credits'
 
@@ -30,6 +31,7 @@ export async function sendPoke(
 ) {
   if (senderId === toUserId) throw new ApiError('You cannot poke yourself.', 400)
 
+  await requireVerifiedEmail(senderId)
   await requireUserBirthYearOnFile(senderId)
 
   const db = getDb()

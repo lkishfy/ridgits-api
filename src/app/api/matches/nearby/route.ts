@@ -16,6 +16,7 @@ import {
 } from '@/lib/ridgits-products'
 import { getNearbyAccess } from '@/lib/ridgits-subscription'
 import { repairStaleMembershipTier } from '@/lib/subscription-badge'
+import { requireVerifiedEmail } from '@/lib/trust-safety/email-verification'
 import { applyWebCors, isRidgitsWebClient, publicApiCorsHeaders, webCorsJson } from '@/lib/trust-safety/cors'
 
 export const maxDuration = 300
@@ -98,6 +99,9 @@ export async function POST(request: NextRequest) {
     typeof body.minCompatibility === 'number' ? body.minCompatibility : 5
 
   try {
+    if (!isRidgitsBypassEmail(auth.email)) {
+      await requireVerifiedEmail(auth.uid)
+    }
     await repairStaleMembershipTier(auth.uid)
     const access = await getNearbyAccess(auth.uid, auth.email)
     const requested =

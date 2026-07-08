@@ -37,6 +37,7 @@ import {
 } from '@/lib/matching/quiz-normalize'
 import { CLOSE_MATCHES_THRESHOLD_MILES } from '@/lib/ridgits-products'
 import { clampMatchAgeRangeMin } from '@/lib/trust-safety/age'
+import { getVerifiedEmailMap } from '@/lib/trust-safety/email-verification'
 
 export type NearbyMatchScanOptions = {
   closeCountOnly?: boolean
@@ -491,12 +492,18 @@ export async function findNearbyMatches(
       : [...topCandidateIds, ...extraProximityIds.filter((id) => !topSet.has(id))]
   const compatById = new Map(scored.map((entry) => [entry.userId, entry.compat]))
 
-  const { profileById, userById } = await loadProfileMaps(candidateIds)
+  let filteredCandidateIds = candidateIds
+  if (!reviewBypass && candidateIds.length > 0) {
+    const verifiedMap = await getVerifiedEmailMap(candidateIds)
+    filteredCandidateIds = candidateIds.filter((id) => verifiedMap.get(id) === true)
+  }
+
+  const { profileById, userById } = await loadProfileMaps(filteredCandidateIds)
 
   const geocodeRequests: Array<{ userId: string; location: string; city?: string; stateCode?: string }> =
     []
 
-  for (const candidateId of candidateIds) {
+  for (const candidateId of filteredCandidateIds) {
     const publicProfile = profileById.get(candidateId)
     const privateProfile = userById.get(candidateId)
     if (!publicProfile || !privateProfile) continue
@@ -523,7 +530,7 @@ export async function findNearbyMatches(
   let closeScan: CloseMatchScanResult = { count: 0, previews: [], userIds: [] }
   if (includeCloseCount && !closeCountOnly) {
     closeScan = await computeCloseMatchesForCandidates(
-      candidateIds,
+      filteredCandidateIds,
       mergedProfile,
       myCoords,
       hasAgeRange,
@@ -537,7 +544,7 @@ export async function findNearbyMatches(
 
   const matches: Record<string, unknown>[] = []
 
-  for (const candidateId of candidateIds) {
+  for (const candidateId of filteredCandidateIds) {
     const publicProfile = profileById.get(candidateId)
     const privateProfile = userById.get(candidateId)
     if (!publicProfile || !privateProfile) continue

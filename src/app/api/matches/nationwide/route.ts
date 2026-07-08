@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { apiErrorResponse } from '@/lib/api-errors'
 import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
 import { getTopNationwideMatches } from '@/lib/matching/nationwide'
+import { isRidgitsBypassEmail } from '@/lib/ridgits-bypass'
+import { requireVerifiedEmail } from '@/lib/trust-safety/email-verification'
 import { applyWebCors, publicApiCorsHeaders, webCorsJson } from '@/lib/trust-safety/cors'
 
 export const maxDuration = 300
@@ -25,6 +27,9 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    if (!isRidgitsBypassEmail(auth.email)) {
+      await requireVerifiedEmail(auth.uid)
+    }
     const matches = await getTopNationwideMatches(
       auth.uid,
       typeof body.limit === 'number' ? body.limit : 50,

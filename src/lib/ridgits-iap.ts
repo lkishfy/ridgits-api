@@ -2,11 +2,14 @@ import { FieldValue } from 'firebase-admin/firestore'
 import { ApiError } from '@/lib/api-errors'
 import { getDb } from '@/lib/firebase-admin'
 import {
-  decodeAppleJwsPayload,
   resolveExpiresIso,
   resolveOriginalTransactionId,
   resolveTransactionId,
 } from '@/lib/apple-jws'
+import {
+  verifyAppleRenewalJws,
+  verifyAppleTransactionJws,
+} from '@/lib/apple-jws-verifier'
 import {
   ARCHETYPE_BUNDLE_PRODUCT_ID,
   ARCHETYPE_PACK_IDS,
@@ -45,40 +48,37 @@ function assertBundleId(bundleId: string | undefined) {
   }
 }
 
-function parseTransactionInput(input: LinkPurchaseInput): {
+function parseTransactionInput(input: LinkPurchaseInput): Promise<{
   transactionId: string
   productId: string
   originalTransactionId: string
   subscriptionExpiration: string | null
-} {
-  let transactionId = input.transactionId?.trim() ?? ''
-  let productId = input.productId?.trim() ?? ''
-  let subscriptionExpiration: string | null = null
-
+}> {
   const signed = input.signedTransactionInfo?.trim() ?? ''
   if (!signed) {
     throw new Error('signedTransactionInfo is required')
   }
 
   if (!signed.startsWith('{') && signed.includes('.')) {
-    const payload = decodeAppleJwsPayload(signed)
-    transactionId = resolveTransactionId(payload, transactionId)
-    productId = String(payload.productId || productId).trim()
-    assertBundleId(payload.bundleId)
-    subscriptionExpiration = resolveExpiresIso(payload)
-    return {
-      transactionId,
-      productId,
-      originalTransactionId: resolveOriginalTransactionId(payload, transactionId),
-      subscriptionExpiration,
-    }
+    return verifyAppleTransactionJws(signed).then((payload) => {
+      const transactionId = resolveTransactionId(payload, input.transactionId?.trim() ?? '')
+      const productId = String(payload.productId || input.productId?.trim() || '').trim()
+      assertBundleId(String(payload.bundleId ?? ''))
+      const subscriptionExpiration = resolveExpiresIso(payload)
+      return {
+        transactionId,
+        productId,
+        originalTransactionId: resolveOriginalTransactionId(payload, transactionId),
+        subscriptionExpiration,
+      }
+    })
   }
 
   throw new Error('Invalid signedTransactionInfo payload')
 }
 
 export async function linkPurchase(input: LinkPurchaseInput): Promise<LinkPurchaseResult> {
-  const parsed = parseTransactionInput(input)
+  const parsed = await parseTransactionInput(input)
   const { transactionId, productId, originalTransactionId, subscriptionExpiration } = parsed
 
   if (!SUPPORTED_IAP_PRODUCT_IDS.has(productId)) {
@@ -232,16 +232,10 @@ export async function syncRenewalPreference(input: {
 
   const signed = input.signedRenewalInfo?.trim() ?? ''
   if (signed) {
-    try {
-      const payload = decodeAppleJwsPayload(signed) as Record<string, unknown>
-      const renewId = String(
-        payload.autoRenewProductId ?? payload.productId ?? '',
-      ).trim()
-      if (renewId && renewId !== productId) {
-        throw new Error('Renewal product mismatch')
-      }
-    } catch (error) {
-      console.warn('[iap/sync-renewal] renewal JWS check skipped', input.uid, error)
+    const payload = await verifyAppleRenewalJws(signed)
+    const renewId = String(payload.autoRenewProductId ?? payload.productId ?? '').trim()
+    if (renewId && renewId !== productId) {
+      throw new ApiError('Renewal product mismatch.', 400, 'INVALID_IAP_SIGNATURE')
     }
   }
 
@@ -307,7 +301,7 @@ export async function applyAppStoreNotification(input: {
   const { notificationType, subtype, signedTransactionInfo } = input
   if (!signedTransactionInfo) return
 
-  const payload = decodeAppleJwsPayload(signedTransactionInfo)
+  const payload = await verifyAppleTransactionJws(signedTransactionInfo)
   const originalTransactionId = resolveOriginalTransactionId(
     payload,
     resolveTransactionId(payload),

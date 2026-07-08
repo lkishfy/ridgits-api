@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { decodeAppleJwsPayload } from '@/lib/apple-jws'
+import { verifyAppleNotificationJws } from '@/lib/apple-jws-verifier'
+import { apiErrorResponse } from '@/lib/api-errors'
 import { applyAppStoreNotification } from '@/lib/ridgits-iap'
 
 export async function GET() {
@@ -20,21 +21,19 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const outer = decodeAppleJwsPayload(signedPayload) as {
-      notificationType?: string
-      subtype?: string
-      data?: { signedTransactionInfo?: string }
-    }
+    const outer = await verifyAppleNotificationJws(signedPayload)
+    const data = outer.data as { signedTransactionInfo?: string } | undefined
 
     await applyAppStoreNotification({
       notificationType: String(outer.notificationType ?? ''),
-      subtype: outer.subtype,
-      signedTransactionInfo: outer.data?.signedTransactionInfo,
+      subtype: typeof outer.subtype === 'string' ? outer.subtype : undefined,
+      signedTransactionInfo: data?.signedTransactionInfo,
     })
 
     return NextResponse.json({ ok: true })
   } catch (error) {
-    console.error('[app-store webhook]', error)
-    return NextResponse.json({ error: 'Webhook processing failed' }, { status: 500 })
+    const { message, status } = apiErrorResponse(error)
+    console.error('[app-store webhook]', message)
+    return NextResponse.json({ error: message }, { status: status >= 400 && status < 600 ? status : 400 })
   }
 }

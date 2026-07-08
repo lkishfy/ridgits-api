@@ -18,6 +18,7 @@ import { assertPhoneNumberNotTooEarly } from '@/lib/messaging/early-phone'
 import { isVisibleInCommunity } from '@/lib/matching/compatibility'
 import { requireAccountCooldownElapsed } from '@/lib/trust-safety/account-age'
 import { requireUserBirthYearOnFile } from '@/lib/trust-safety/age'
+import { requireVerifiedEmail } from '@/lib/trust-safety/email-verification'
 import { requireActiveSubscription } from '@/lib/trust-safety/subscription-gate'
 import { validateProfilePhotoUrl } from '@/lib/trust-safety/profile-photo'
 import { isRidgitsBypassEmail } from '@/lib/ridgits-bypass'
@@ -68,6 +69,7 @@ async function ensureMessagingAllowed(uid: string) {
   }
 
   await requireUserBirthYearOnFile(uid)
+  await requireVerifiedEmail(uid)
 
   const profileSnap = await getDb().collection('publicProfiles').doc(uid).get()
   if (!profileSnap.exists) throw new ApiError('You must complete your profile before messaging.', 412)

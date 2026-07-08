@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { FieldValue } from 'firebase-admin/firestore'
 import { ApiError } from '@/lib/api-errors'
 import { getDb } from '@/lib/firebase-admin'
+import { assertAllowedProfilePhotoUrl } from '@/lib/trust-safety/profile-photo-url'
 
 const PROFILE_PHOTO_HASH_SALT =
   process.env.RIDGITS_PROFILE_PHOTO_HASH_SALT ?? 'ridgits-profile-photo-salt-v1'
@@ -53,6 +54,15 @@ export async function validateProfilePhotoUrl(url: string | null | undefined): P
     return { ok: false, reason: 'Profile photo URL must use https.' }
   }
 
+  try {
+    await assertAllowedProfilePhotoUrl(parsed.toString())
+  } catch (error) {
+    if (error instanceof ApiError) {
+      return { ok: false, reason: error.message }
+    }
+    return { ok: false, reason: 'Profile photo URL is not allowed.' }
+  }
+
   if (process.env.RIDGITS_PHOTO_HEAD_CHECK === 'true') {
     try {
       const response = await fetch(parsed.toString(), { method: 'HEAD', signal: AbortSignal.timeout(4000) })
@@ -81,6 +91,7 @@ export async function requireValidProfilePhoto(url: string | null | undefined): 
 
 export async function hashProfilePhotoFromUrl(url: string): Promise<string> {
   const trimmed = url.trim()
+  await assertAllowedProfilePhotoUrl(trimmed)
   const response = await fetch(trimmed, { signal: AbortSignal.timeout(12000) })
   if (!response.ok) {
     throw new ApiError('Profile photo could not be downloaded for verification.', 412, 'INVALID_PROFILE_PHOTO')

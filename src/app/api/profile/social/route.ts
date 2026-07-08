@@ -3,6 +3,7 @@ import { apiErrorResponse } from '@/lib/api-errors'
 import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
 import { getDb } from '@/lib/firebase-admin'
 import { isQuizCompleteForMatching } from '@/lib/matching/quiz-normalize'
+import { assertSocialProfileAccess } from '@/lib/profile-social-access'
 
 export async function GET(request: NextRequest) {
   const auth = await requireRidgitsAuth(request)
@@ -33,6 +34,8 @@ export async function GET(request: NextRequest) {
     if (!targetSnap.exists) {
       return NextResponse.json({ socialHandle: null, socialPlatform: null })
     }
+
+    await assertSocialProfileAccess(auth.uid, userId)
 
     const socialHandle = String(targetSnap.get('socialHandle') ?? '').trim()
     const socialPlatform = String(targetSnap.get('socialPlatform') ?? '').trim().toLowerCase()

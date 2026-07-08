@@ -1,5 +1,6 @@
 import { CompareFacesCommand, RekognitionClient } from '@aws-sdk/client-rekognition'
 import { ApiError } from '@/lib/api-errors'
+import { assertAllowedProfilePhotoUrl } from '@/lib/trust-safety/profile-photo-url'
 
 let rekognitionClient: RekognitionClient | null = null
 
@@ -28,6 +29,7 @@ function getRekognitionClient(): RekognitionClient {
 }
 
 export async function downloadImageBytes(url: string): Promise<Buffer> {
+  await assertAllowedProfilePhotoUrl(url)
   const response = await fetch(url, { signal: AbortSignal.timeout(15000) })
   if (!response.ok) {
     throw new ApiError('Could not download image for face comparison.', 502, 'FACE_MATCH_FAILED')
