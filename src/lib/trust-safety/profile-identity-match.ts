@@ -2,6 +2,12 @@ import { FieldValue } from 'firebase-admin/firestore'
 import { ApiError } from '@/lib/api-errors'
 import { getDb } from '@/lib/firebase-admin'
 import { getStripe, isStripeConfigured } from '@/lib/stripe-client'
+import {
+  compareFacesWithRekognition,
+  downloadImageBytes,
+  isRekognitionConfigured,
+  secureClearBuffer,
+} from '@/lib/trust-safety/rekognition-face-compare'
 import { validateProfilePhotoUrl, hashProfilePhotoFromUrl, assertProfilePhotoNotAlreadyClaimed, claimProfilePhotoForUser } from '@/lib/trust-safety/profile-photo'
 
 const DEFAULT_MATCH_THRESHOLD = 0.9
@@ -16,7 +22,7 @@ async function createTemporarySelfieUrl(selfieFileId: string): Promise<string> {
   const stripe = getStripe()
   const fileLink = await stripe.fileLinks.create({
     file: selfieFileId,
-    expires_at: Math.floor(Date.now() / 1000) + 3600,
+    expires_at: Math.floor(Date.now() / 1000) + 30,
   })
   if (!fileLink.url) {
     throw new ApiError('Could not access verified selfie for comparison.', 502, 'IDENTITY_SELFIE_UNAVAILABLE')
@@ -30,6 +36,14 @@ async function resolveVerifiedSelfieFileId(uid: string): Promise<string> {
   }
 
   const userSnap = await getDb().collection('users').doc(uid).get()
+  if (userSnap.get('identityVerificationImagesRedacted') === true) {
+    throw new ApiError(
+      'Re-verify your identity before matching a new profile photo.',
+      412,
+      'IDENTITY_REVERIFICATION_REQUIRED',
+    )
+  }
+
   if (String(userSnap.get('identityVerificationStatus') ?? '') !== 'verified') {
     throw new ApiError('Complete identity verification before matching your profile photo.', 412, 'IDENTITY_VERIFICATION_REQUIRED')
   }
@@ -63,46 +77,31 @@ async function resolveVerifiedSelfieFileId(uid: string): Promise<string> {
   return selfieFileId
 }
 
-async function compareFacesWithSightengine(
-  profilePhotoUrl: string,
-  selfieUrl: string,
-): Promise<{ match: boolean; score: number }> {
-  const apiUser = process.env.SIGHTENGINE_API_USER?.trim()
-  const apiSecret = process.env.SIGHTENGINE_API_SECRET?.trim()
-  if (!apiUser || !apiSecret) {
-    throw new ApiError('Face match is not configured.', 503, 'FACE_MATCH_UNAVAILABLE')
+/**
+ * After a successful profile-to-ID match, redact the Stripe Identity session so
+ * selfie and document images are deleted from Stripe per their retention guidance.
+ * https://docs.stripe.com/identity/access-verification-results
+ */
+async function redactVerifiedIdentityImages(uid: string): Promise<void> {
+  const userSnap = await getDb().collection('users').doc(uid).get()
+  if (userSnap.get('identityVerificationImagesRedacted') === true) return
+
+  const sessionId = String(userSnap.get('stripeVerificationSessionId') ?? '').trim()
+  if (!sessionId || !isStripeConfigured()) return
+
+  try {
+    const stripe = getStripe()
+    await stripe.identity.verificationSessions.redact(sessionId)
+    await getDb().collection('users').doc(uid).set(
+      {
+        identityVerificationImagesRedacted: true,
+        identityImagesRedactedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    )
+  } catch (error) {
+    console.error('[profile-identity-match] failed to redact Stripe identity images', uid, error)
   }
-
-  const params = new URLSearchParams({
-    url: profilePhotoUrl,
-    url2: selfieUrl,
-    models: 'face-compare',
-    api_user: apiUser,
-    api_secret: apiSecret,
-  })
-
-  const response = await fetch(`https://api.sightengine.com/1.0/check.json?${params.toString()}`, {
-    signal: AbortSignal.timeout(15000),
-  })
-
-  if (!response.ok) {
-    throw new ApiError('Face comparison failed.', 502, 'FACE_MATCH_FAILED')
-  }
-
-  const data = (await response.json()) as {
-    status?: string
-    face?: { similarity?: number }
-    similarity?: number
-    error?: { message?: string }
-  }
-
-  if (data.status === 'failure') {
-    throw new ApiError(data.error?.message ?? 'Face comparison could not be completed.', 412, 'FACE_MATCH_FAILED')
-  }
-
-  const score = data.face?.similarity ?? data.similarity ?? 0
-  const threshold = matchThreshold()
-  return { match: score >= threshold, score }
 }
 
 export interface ProfileIdentityMatchResult {
@@ -124,6 +123,10 @@ async function syncPublicProfilePhotoVerified(uid: string, verified: boolean): P
 }
 
 export async function matchProfilePhotoToIdentity(uid: string): Promise<ProfileIdentityMatchResult> {
+  if (!isRekognitionConfigured()) {
+    throw new ApiError('Face match is not configured.', 503, 'FACE_MATCH_UNAVAILABLE')
+  }
+
   const profileSnap = await getDb().collection('publicProfiles').doc(uid).get()
   const profileImage = String(profileSnap.get('image') ?? '').trim()
 
@@ -143,24 +146,38 @@ export async function matchProfilePhotoToIdentity(uid: string): Promise<ProfileI
   const selfieFileId = await resolveVerifiedSelfieFileId(uid)
   const selfieUrl = await createTemporarySelfieUrl(selfieFileId)
 
-  const { match, score } = await compareFacesWithSightengine(profileImage, selfieUrl)
-  const threshold = matchThreshold()
-  const status = match ? 'verified' : 'failed'
+  let profileBytes: Buffer | null = null
+  let selfieBytes: Buffer | null = null
 
-  await getDb().collection('users').doc(uid).set(
-    {
-      profilePhotoIdentityMatchStatus: status,
-      profilePhotoIdentityMatchAt: FieldValue.serverTimestamp(),
-      profilePhotoIdentityMatchScore: score,
-    },
-    { merge: true },
-  )
+  try {
+    ;[profileBytes, selfieBytes] = await Promise.all([
+      downloadImageBytes(profileImage),
+      downloadImageBytes(selfieUrl),
+    ])
 
-  await syncPublicProfilePhotoVerified(uid, match)
+    const threshold = matchThreshold()
+    const { match, score } = await compareFacesWithRekognition(profileBytes, selfieBytes, threshold)
+    const status = match ? 'verified' : 'failed'
 
-  if (match) {
-    await claimProfilePhotoForUser(uid, photoHash)
+    await getDb().collection('users').doc(uid).set(
+      {
+        profilePhotoIdentityMatchStatus: status,
+        profilePhotoIdentityMatchAt: FieldValue.serverTimestamp(),
+        profilePhotoIdentityMatchScore: score,
+      },
+      { merge: true },
+    )
+
+    await syncPublicProfilePhotoVerified(uid, match)
+
+    if (match) {
+      await claimProfilePhotoForUser(uid, photoHash)
+      await redactVerifiedIdentityImages(uid)
+    }
+
+    return { status, score, threshold }
+  } finally {
+    secureClearBuffer(profileBytes)
+    secureClearBuffer(selfieBytes)
   }
-
-  return { status, score, threshold }
 }

@@ -21,9 +21,15 @@ export async function POST(request: NextRequest) {
     const userSnap = await getDb().collection('users').doc(auth.uid).get()
     if (String(userSnap.get('identityVerificationStatus') ?? '') === 'verified') {
       try {
-        await matchProfilePhotoToIdentity(auth.uid)
+        const identityMatch = await matchProfilePhotoToIdentity(auth.uid)
+        return NextResponse.json({ ok: true, identityMatch })
       } catch (error) {
+        const { message, code } = apiErrorResponse(error)
         console.error('[profile/register-photo] identity face match failed', auth.uid, error)
+        return NextResponse.json({
+          ok: true,
+          identityMatchError: { error: message, code },
+        })
       }
     }
 

@@ -216,6 +216,7 @@ export async function getIdentityStatus(uid: string): Promise<IdentityStatusPayl
 
   const identityOk = identityVerificationStatus === 'verified'
   const phoneOk = !identityRequiresPhoneVerification() || phoneVerificationStatus === 'verified'
+  const photoOk = profilePhotoIdentityMatchStatus === 'verified'
 
   return {
     identityVerificationStatus,
@@ -227,7 +228,7 @@ export async function getIdentityStatus(uid: string): Promise<IdentityStatusPayl
     profilePhotoIdentityMatchScore:
       typeof data.profilePhotoIdentityMatchScore === 'number' ? data.profilePhotoIdentityMatchScore : null,
     canSubscribe: true,
-    canMessage: identityOk && phoneOk,
+    canMessage: identityOk && phoneOk && photoOk,
   }
 }
 
@@ -247,6 +248,14 @@ export async function requireIdentityVerified(uid: string, email?: string | null
       'Phone verification required before messaging.',
       403,
       'PHONE_VERIFICATION_REQUIRED',
+    )
+  }
+
+  if (status.profilePhotoIdentityMatchStatus !== 'verified') {
+    throw new ApiError(
+      'Your profile photo must match your verified ID selfie to message.',
+      412,
+      'PROFILE_PHOTO_IDENTITY_MISMATCH',
     )
   }
 }
@@ -451,6 +460,8 @@ export async function applyVerificationSessionUpdate(session: Stripe.Identity.Ve
 
       if (allowVerified) {
         update.identityVerifiedAt = FieldValue.serverTimestamp()
+        update.identityVerificationImagesRedacted = false
+        update.identityImagesRedactedAt = FieldValue.delete()
 
         if (documentHash) {
           await claimIdentityDocumentForUser(uid, documentHash)

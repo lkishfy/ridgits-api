@@ -47,12 +47,36 @@ STRIPE_SECRET_KEY=sk_...
 STRIPE_WEBHOOK_SECRET=whsec_...
 STRIPE_IDENTITY_RETURN_URL=https://ridgits.com/identity/complete
 STRIPE_IDENTITY_VERIFICATION_FLOW_ID=vf_...
+AWS_ACCESS_KEY_ID=AKIA...
+AWS_SECRET_ACCESS_KEY=...
+AWS_REGION=us-east-1
+RIDGITS_IDENTITY_FACE_MATCH_THRESHOLD=0.90
+# Optional: keep Sightengine for NSFW profile moderation only.
 SIGHTENGINE_API_USER=...
 SIGHTENGINE_API_SECRET=...
-RIDGITS_IDENTITY_FACE_MATCH_THRESHOLD=0.90
+RIDGITS_MODERATION_PROVIDER=sightengine
 ```
 
-Face match uses Sightengine `face-compare` (same credentials as optional profile moderation).
+Face match uses **Amazon Rekognition CompareFaces** (`AWS_*` vars above). Sightengine is optional and only used when `RIDGITS_MODERATION_PROVIDER=sightengine` for NSFW/content moderation.
+
+### AWS IAM for Rekognition
+
+Create an IAM user (or role) used only by `ridgits-api` with this policy:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["rekognition:CompareFaces"],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+Generate access keys for that user and add them to Vercel as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Use the same region you enabled Rekognition in (e.g. `us-east-1`).
 
 ## 5. Ridgits iOS
 

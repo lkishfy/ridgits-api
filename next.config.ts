@@ -3,7 +3,7 @@ import path from 'path'
 
 const nextConfig: NextConfig = {
   outputFileTracingRoot: path.join(__dirname),
-  serverExternalPackages: ['firebase-admin'],
+  serverExternalPackages: ['firebase-admin', '@aws-sdk/client-rekognition'],
   eslint: { ignoreDuringBuilds: true },
 }
 
