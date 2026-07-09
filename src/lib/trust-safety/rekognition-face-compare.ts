@@ -1,6 +1,9 @@
 import { CompareFacesCommand, RekognitionClient } from '@aws-sdk/client-rekognition'
 import { ApiError } from '@/lib/api-errors'
-import { assertAllowedProfilePhotoUrl } from '@/lib/trust-safety/profile-photo-url'
+import {
+  assertAllowedProfilePhotoUrl,
+  assertAllowedStripeIdentitySelfieUrl,
+} from '@/lib/trust-safety/profile-photo-url'
 
 let rekognitionClient: RekognitionClient | null = null
 
@@ -28,15 +31,25 @@ function getRekognitionClient(): RekognitionClient {
   return rekognitionClient
 }
 
-export async function downloadImageBytes(url: string): Promise<Buffer> {
-  await assertAllowedProfilePhotoUrl(url)
+async function downloadImageBytesFromUrl(
+  url: string,
+  validateUrl: (url: string) => Promise<URL>,
+  options?: { requireImageContentType?: boolean },
+): Promise<Buffer> {
+  await validateUrl(url)
   const response = await fetch(url, { signal: AbortSignal.timeout(15000) })
   if (!response.ok) {
     throw new ApiError('Could not download image for face comparison.', 502, 'FACE_MATCH_FAILED')
   }
 
+  const requireImageContentType = options?.requireImageContentType ?? true
   const contentType = response.headers.get('content-type') ?? ''
-  if (contentType && !contentType.startsWith('image/')) {
+  if (
+    requireImageContentType &&
+    contentType &&
+    !contentType.startsWith('image/') &&
+    contentType !== 'application/octet-stream'
+  ) {
     throw new ApiError('Image URL does not point to a photo.', 412, 'INVALID_PROFILE_PHOTO')
   }
 
@@ -49,6 +62,22 @@ export async function downloadImageBytes(url: string): Promise<Buffer> {
   }
 
   return bytes
+}
+
+export async function downloadProfilePhotoBytes(url: string): Promise<Buffer> {
+  return downloadImageBytesFromUrl(url, assertAllowedProfilePhotoUrl)
+}
+
+/** Stripe Identity file links are not profile storage; use a separate host allowlist. */
+export async function downloadIdentitySelfieBytes(url: string): Promise<Buffer> {
+  return downloadImageBytesFromUrl(url, assertAllowedStripeIdentitySelfieUrl, {
+    requireImageContentType: false,
+  })
+}
+
+/** @deprecated Prefer downloadProfilePhotoBytes or downloadIdentitySelfieBytes. */
+export async function downloadImageBytes(url: string): Promise<Buffer> {
+  return downloadProfilePhotoBytes(url)
 }
 
 /** Best-effort wipe of downloaded image bytes after face comparison. */

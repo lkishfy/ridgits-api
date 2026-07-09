@@ -7,6 +7,9 @@ const DEFAULT_ALLOWED_HOSTS = [
   'storage.googleapis.com',
 ]
 
+/** Temporary URLs from Stripe Identity `fileLinks.create` (ID verification selfie). */
+const STRIPE_IDENTITY_FILE_HOSTS = new Set(['files.stripe.com'])
+
 function allowedHosts(): Set<string> {
   const fromEnv = (process.env.RIDGITS_PROFILE_PHOTO_ALLOWED_HOSTS ?? '')
     .split(',')
@@ -111,5 +114,43 @@ export async function assertAllowedProfilePhotoUrl(url: string): Promise<URL> {
   if (!skipDnsCheck) {
     await assertResolvedHostSafe(hostname)
   }
+  return parsed
+}
+
+/** Restrict Stripe Identity selfie fetches to short-lived file link URLs only. */
+export async function assertAllowedStripeIdentitySelfieUrl(url: string): Promise<URL> {
+  let parsed: URL
+  try {
+    parsed = new URL(url.trim())
+  } catch {
+    throw new ApiError(
+      "We couldn't verify your profile photo against your ID.",
+      502,
+      'IDENTITY_SELFIE_UNAVAILABLE',
+    )
+  }
+
+  if (parsed.protocol !== 'https:') {
+    throw new ApiError(
+      "We couldn't verify your profile photo against your ID.",
+      502,
+      'IDENTITY_SELFIE_UNAVAILABLE',
+    )
+  }
+
+  const hostname = parsed.hostname.toLowerCase()
+  const path = parsed.pathname.toLowerCase()
+  const hostAllowed =
+    STRIPE_IDENTITY_FILE_HOSTS.has(hostname) ||
+    (hostname.endsWith('.stripe.com') && path.startsWith('/v1/links/'))
+
+  if (!hostAllowed) {
+    throw new ApiError(
+      "We couldn't verify your profile photo against your ID.",
+      502,
+      'IDENTITY_SELFIE_UNAVAILABLE',
+    )
+  }
+
   return parsed
 }

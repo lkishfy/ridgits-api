@@ -9,7 +9,8 @@ import {
 } from '@/lib/stripe-client'
 import {
   compareFacesWithRekognition,
-  downloadImageBytes,
+  downloadIdentitySelfieBytes,
+  downloadProfilePhotoBytes,
   isRekognitionConfigured,
   secureClearBuffer,
 } from '@/lib/trust-safety/rekognition-face-compare'
@@ -323,14 +324,15 @@ export async function matchProfilePhotoToIdentity(
 
   try {
     ;[profileBytes, selfieBytes] = await Promise.all([
-      downloadImageBytes(profileImage).catch(() => {
+      downloadProfilePhotoBytes(profileImage).catch(() => {
         throw new ApiError(
           'We could not download your profile photo for verification. Save your profile and try again.',
           412,
           'INVALID_PROFILE_PHOTO',
         )
       }),
-      downloadImageBytes(selfieUrl).catch(() => {
+      downloadIdentitySelfieBytes(selfieUrl).catch((error) => {
+        if (error instanceof ApiError) throw error
         throw new ApiError(
           customerFacingSupportMessage("We couldn't verify your profile photo against your ID."),
           502,

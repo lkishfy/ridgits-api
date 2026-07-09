@@ -57,6 +57,7 @@ export interface IdentityStatusPayload {
   identityVerifiedAt: string | null
   phoneVerificationStatus: PhoneVerificationStatus
   phoneVerifiedAt: string | null
+  phoneVerificationRequired: boolean
   profilePhotoIdentityMatchStatus: ProfilePhotoIdentityMatchStatus
   profilePhotoIdentityMatchAt: string | null
   profilePhotoIdentityMatchScore: number | null
@@ -208,6 +209,33 @@ async function syncIdentityStatusFromStripeIfNeeded(
   return bestData
 }
 
+/** Re-run profile ↔ ID selfie match when Stripe is verified but Firestore never got a result. */
+async function tryAutoMatchProfilePhotoIfNeeded(
+  uid: string,
+  email: string | null | undefined,
+  data: Record<string, unknown>,
+): Promise<void> {
+  if (await isManualProfilePhotoVerifiedForUser(uid, email)) return
+
+  const identityOk = data.identityVerificationStatus === 'verified'
+  const phoneOk =
+    !identityRequiresPhoneVerification() || data.phoneVerificationStatus === 'verified'
+  if (!identityOk || !phoneOk) return
+
+  const matchStatus = String(data.profilePhotoIdentityMatchStatus ?? '')
+  if (matchStatus === 'verified' || matchStatus === 'failed') return
+
+  const profileSnap = await getDb().collection('publicProfiles').doc(uid).get()
+  const profileImage = String(profileSnap.get('image') ?? '').trim()
+  if (!profileImage) return
+
+  try {
+    await matchProfilePhotoToIdentity(uid, email)
+  } catch (error) {
+    console.error('[stripe-identity] auto profile photo match on status', uid, error)
+  }
+}
+
 export async function getIdentityStatus(
   uid: string,
   email?: string | null,
@@ -215,10 +243,14 @@ export async function getIdentityStatus(
   const snap = await getDb().collection('users').doc(uid).get()
   const data = await syncIdentityStatusFromStripeIfNeeded(uid, snap.data() ?? {})
 
-  const identityVerificationStatus = (data.identityVerificationStatus as IdentityVerificationStatus | undefined) ?? 'none'
-  const phoneVerificationStatus = (data.phoneVerificationStatus as PhoneVerificationStatus | undefined) ?? 'none'
+  await tryAutoMatchProfilePhotoIfNeeded(uid, email, data)
+  const refreshedSnap = await getDb().collection('users').doc(uid).get()
+  const refreshedData = refreshedSnap.data() ?? data
+
+  const identityVerificationStatus = (refreshedData.identityVerificationStatus as IdentityVerificationStatus | undefined) ?? 'none'
+  const phoneVerificationStatus = (refreshedData.phoneVerificationStatus as PhoneVerificationStatus | undefined) ?? 'none'
   const profilePhotoIdentityMatchStatus =
-    (data.profilePhotoIdentityMatchStatus as ProfilePhotoIdentityMatchStatus | undefined) ?? 'none'
+    (refreshedData.profilePhotoIdentityMatchStatus as ProfilePhotoIdentityMatchStatus | undefined) ?? 'none'
 
   const identityOk = identityVerificationStatus === 'verified'
   const phoneOk = !identityRequiresPhoneVerification() || phoneVerificationStatus === 'verified'
@@ -227,13 +259,16 @@ export async function getIdentityStatus(
 
   return {
     identityVerificationStatus,
-    identityVerifiedAt: timestampToIso(data.identityVerifiedAt),
+    identityVerifiedAt: timestampToIso(refreshedData.identityVerifiedAt),
     phoneVerificationStatus,
-    phoneVerifiedAt: timestampToIso(data.phoneVerifiedAt),
+    phoneVerifiedAt: timestampToIso(refreshedData.phoneVerifiedAt),
+    phoneVerificationRequired: identityRequiresPhoneVerification(),
     profilePhotoIdentityMatchStatus: manualPhotoBypass ? 'verified' : profilePhotoIdentityMatchStatus,
-    profilePhotoIdentityMatchAt: timestampToIso(data.profilePhotoIdentityMatchAt),
+    profilePhotoIdentityMatchAt: timestampToIso(refreshedData.profilePhotoIdentityMatchAt),
     profilePhotoIdentityMatchScore:
-      typeof data.profilePhotoIdentityMatchScore === 'number' ? data.profilePhotoIdentityMatchScore : null,
+      typeof refreshedData.profilePhotoIdentityMatchScore === 'number'
+        ? refreshedData.profilePhotoIdentityMatchScore
+        : null,
     canSubscribe: true,
     canMessage: identityOk && phoneOk && photoOk,
   }
