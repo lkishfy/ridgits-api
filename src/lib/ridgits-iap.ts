@@ -41,6 +41,16 @@ export interface LinkPurchaseResult {
   idempotent: boolean
 }
 
+const IAP_OWNERSHIP_COLLECTION = 'iapOwnership'
+
+/** Resolves the uid that owns an App Store transaction (global claim, not per-user list). */
+export async function findIapOwnerUid(transactionId: string): Promise<string | null> {
+  const snap = await getDb().collection(IAP_OWNERSHIP_COLLECTION).doc(transactionId).get()
+  if (!snap.exists) return null
+  const uid = snap.get('uid')
+  return typeof uid === 'string' && uid.trim() ? uid.trim() : null
+}
+
 function assertBundleId(bundleId: string | undefined) {
   const actual = String(bundleId ?? RIDGITS_BUNDLE_ID).trim()
   if (actual !== RIDGITS_BUNDLE_ID) {
@@ -97,10 +107,25 @@ export async function linkPurchase(input: LinkPurchaseInput): Promise<LinkPurcha
 
   const db = getDb()
   const userRef = db.collection('users').doc(input.uid)
+  const ownershipRef = db.collection(IAP_OWNERSHIP_COLLECTION).doc(transactionId)
 
   const result = await db.runTransaction(async (transaction) => {
-    const userSnap = await transaction.get(userRef)
+    const [userSnap, ownershipSnap] = await Promise.all([
+      transaction.get(userRef),
+      transaction.get(ownershipRef),
+    ])
     const isNewUser = !userSnap.exists
+
+    if (ownershipSnap.exists) {
+      const existingUid = String(ownershipSnap.get('uid') ?? '').trim()
+      if (existingUid && existingUid !== input.uid) {
+        throw new ApiError(
+          'This purchase is already linked to another Ridgits account.',
+          409,
+          'IAP_ALREADY_CLAIMED',
+        )
+      }
+    }
 
     const processed: string[] = isNewUser ? [] : (userSnap.get('processedTransactions') ?? [])
     if (processed.includes(transactionId)) {
@@ -204,6 +229,14 @@ export async function linkPurchase(input: LinkPurchaseInput): Promise<LinkPurcha
     }
 
     transaction.set(userRef, update, { merge: true })
+    if (!ownershipSnap.exists) {
+      transaction.set(ownershipRef, {
+        uid: input.uid,
+        originalTransactionId,
+        productId,
+        claimedAt: FieldValue.serverTimestamp(),
+      })
+    }
     return { linked: true, idempotent: false }
   })
 
@@ -231,12 +264,14 @@ export async function syncRenewalPreference(input: {
   }
 
   const signed = input.signedRenewalInfo?.trim() ?? ''
-  if (signed) {
-    const payload = await verifyAppleRenewalJws(signed)
-    const renewId = String(payload.autoRenewProductId ?? payload.productId ?? '').trim()
-    if (renewId && renewId !== productId) {
-      throw new ApiError('Renewal product mismatch.', 400, 'INVALID_IAP_SIGNATURE')
-    }
+  if (!signed) {
+    throw new ApiError('signedRenewalInfo is required.', 400, 'INVALID_IAP_SIGNATURE')
+  }
+
+  const payload = await verifyAppleRenewalJws(signed)
+  const renewId = String(payload.autoRenewProductId ?? payload.productId ?? '').trim()
+  if (renewId && renewId !== productId) {
+    throw new ApiError('Renewal product mismatch.', 400, 'INVALID_IAP_SIGNATURE')
   }
 
   const db = getDb()
@@ -308,18 +343,26 @@ export async function applyAppStoreNotification(input: {
   )
 
   const db = getDb()
-  const usersSnap = await db
-    .collection('users')
-    .where('originalTransactionId', '==', originalTransactionId)
-    .limit(1)
-    .get()
+  const transactionId = resolveTransactionId(payload)
+  let ownerUid = await findIapOwnerUid(transactionId)
 
-  if (usersSnap.empty) {
-    console.warn('[app-store] unmapped originalTransactionId', originalTransactionId)
+  if (!ownerUid) {
+    const usersSnap = await db
+      .collection('users')
+      .where('originalTransactionId', '==', originalTransactionId)
+      .limit(1)
+      .get()
+    if (!usersSnap.empty) {
+      ownerUid = usersSnap.docs[0]!.id
+    }
+  }
+
+  if (!ownerUid) {
+    console.warn('[app-store] unmapped transaction', transactionId, originalTransactionId)
     return
   }
 
-  const userRef = usersSnap.docs[0]!.ref
+  const userRef = db.collection('users').doc(ownerUid)
   const expiresIso = resolveExpiresIso(payload)
   const productId = String(payload.productId ?? '').trim()
   const isNearbyProduct = NEARBY_PRODUCT_IDS.has(productId)

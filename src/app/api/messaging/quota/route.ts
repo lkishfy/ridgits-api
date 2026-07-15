@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiErrorResponse } from '@/lib/api-errors'
-import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
+import { isNextResponse, requireRidgitsAuthAndAppCheck } from '@/lib/ridgits-auth'
 import { getMonthlyMessageQuota } from '@/lib/messaging/handlers'
 import { getDb } from '@/lib/firebase-admin'
 
 export async function GET(request: NextRequest) {
-  const auth = await requireRidgitsAuth(request)
+  const auth = await requireRidgitsAuthAndAppCheck(request)
   if (isNextResponse(auth)) return auth
 
   try {

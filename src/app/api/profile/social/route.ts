@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiErrorResponse } from '@/lib/api-errors'
-import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
+import { isNextResponse, requireRidgitsAuthAndAppCheck } from '@/lib/ridgits-auth'
 import { getDb } from '@/lib/firebase-admin'
 import { isQuizCompleteForMatching } from '@/lib/matching/quiz-normalize'
 import { assertSocialProfileAccess } from '@/lib/profile-social-access'
 
 export async function GET(request: NextRequest) {
-  const auth = await requireRidgitsAuth(request)
+  const auth = await requireRidgitsAuthAndAppCheck(request)
   if (isNextResponse(auth)) return auth
 
   const userId = request.nextUrl.searchParams.get('userId')?.trim() ?? ''

@@ -1,22 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiErrorResponse } from '@/lib/api-errors'
-import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
+import { isNextResponse, requireRidgitsAuthAndAppCheck } from '@/lib/ridgits-auth'
 import { createIdentityVerificationSession } from '@/lib/trust-safety/stripe-identity'
+import { identitySessionBodySchema } from '@/lib/schemas/ridgits-bodies'
+import { parseJsonBody } from '@/lib/schemas/parse-body'
 
 export async function POST(request: NextRequest) {
-  const auth = await requireRidgitsAuth(request)
+  const auth = await requireRidgitsAuthAndAppCheck(request)
   if (isNextResponse(auth)) return auth
 
   try {
-    let body: { phone?: string } = {}
+    let rawBody: unknown = {}
     try {
-      body = await request.json()
+      rawBody = await request.json()
     } catch {
-      body = {}
+      rawBody = {}
     }
 
+    const body = parseJsonBody(identitySessionBodySchema, rawBody)
+    if (body instanceof NextResponse) return body
+
     const session = await createIdentityVerificationSession(auth.uid, {
-      phone: typeof body.phone === 'string' ? body.phone : undefined,
+      phone: body.phone,
     }, auth.email)
     return NextResponse.json({
       verificationUrl: session.url,

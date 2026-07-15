@@ -1,30 +1,39 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
-import { redeemRidgitsReferralCode } from '@/lib/ridgits-referrals'
 import { apiErrorResponse } from '@/lib/api-errors'
+import { isNextResponse, requireRidgitsAuthAndAppCheck } from '@/lib/ridgits-auth'
+import { redeemRidgitsReferralCode } from '@/lib/ridgits-referrals'
+import { enforceRateLimit } from '@/lib/trust-safety/rate-limit'
+import { referralRedeemBodySchema } from '@/lib/schemas/ridgits-bodies'
+import { parseJsonBody } from '@/lib/schemas/parse-body'
 
 export async function POST(request: NextRequest) {
-  const auth = await requireRidgitsAuth(request)
+  const auth = await requireRidgitsAuthAndAppCheck(request)
   if (isNextResponse(auth)) return auth
 
-  let body: { referralCode?: string; source?: string } = {}
+  let rawBody: unknown
   try {
-    body = await request.json()
+    rawBody = await request.json()
   } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
-  const referralCode = body.referralCode?.trim()
-  if (!referralCode) {
-    return NextResponse.json({ error: 'Referral code is required', code: 'invalid_referral_code' }, { status: 400 })
-  }
+  const body = parseJsonBody(referralRedeemBodySchema, rawBody)
+  if (body instanceof NextResponse) return body
 
   try {
+    await enforceRateLimit({
+      bucket: 'referrals-redeem',
+      identifier: auth.uid,
+      limit: 10,
+      windowSeconds: 60 * 60,
+      message: 'Too many referral redemption attempts. Please try again later.',
+    })
+
     const result = await redeemRidgitsReferralCode({
       referredUid: auth.uid,
       referredEmail: auth.email,
-      referralCode,
-      source: body.source?.trim() || undefined,
+      referralCode: body.referralCode,
+      source: body.source,
     })
     return NextResponse.json(result)
   } catch (error) {

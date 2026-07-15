@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiErrorResponse } from '@/lib/api-errors'
-import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
+import { isNextResponse, requireRidgitsAuthAndAppCheck } from '@/lib/ridgits-auth'
 import {
   getNotificationPreferences,
   updateNotificationPreferences,
@@ -9,7 +9,7 @@ import {
 import type { NotificationPreferences } from '@/lib/engagement/types'
 
 export async function GET(request: NextRequest) {
-  const auth = await requireRidgitsAuth(request)
+  const auth = await requireRidgitsAuthAndAppCheck(request)
   if (isNextResponse(auth)) return auth
 
   try {
@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
-  const auth = await requireRidgitsAuth(request)
+  const auth = await requireRidgitsAuthAndAppCheck(request)
   if (isNextResponse(auth)) return auth
 
   let body: Partial<NotificationPreferences> = {}
@@ -42,7 +42,7 @@ export async function PATCH(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const auth = await requireRidgitsAuth(request)
+  const auth = await requireRidgitsAuthAndAppCheck(request)
   if (isNextResponse(auth)) return auth
 
   let body: { type?: string; metadata?: Record<string, string> } = {}

@@ -1,23 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiErrorResponse } from '@/lib/api-errors'
-import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
+import { isNextResponse, requireRidgitsAuthAndAppCheck } from '@/lib/ridgits-auth'
 import { sendPoke } from '@/lib/pokes/handlers'
 import { enforceRateLimit, getClientIp } from '@/lib/trust-safety/rate-limit'
+import { pokeSendBodySchema } from '@/lib/schemas/ridgits-bodies'
+import { parseJsonBody } from '@/lib/schemas/parse-body'
 
 export async function POST(request: NextRequest) {
-  const auth = await requireRidgitsAuth(request)
+  const auth = await requireRidgitsAuthAndAppCheck(request)
   if (isNextResponse(auth)) return auth
 
-  let body: { toUserId?: string } = {}
+  let rawBody: unknown
   try {
-    body = await request.json()
+    rawBody = await request.json()
   } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
-  if (!body.toUserId?.trim()) {
-    return NextResponse.json({ error: 'toUserId is required' }, { status: 400 })
-  }
+  const body = parseJsonBody(pokeSendBodySchema, rawBody)
+  if (body instanceof NextResponse) return body
 
   try {
     await enforceRateLimit({
@@ -34,7 +35,7 @@ export async function POST(request: NextRequest) {
       windowSeconds: 60 * 60,
     })
 
-    const result = await sendPoke(auth.uid, body.toUserId.trim())
+    const result = await sendPoke(auth.uid, body.toUserId)
     return NextResponse.json(result)
   } catch (error) {
     const { message, status, code, retryAfterSeconds } = apiErrorResponse(error)

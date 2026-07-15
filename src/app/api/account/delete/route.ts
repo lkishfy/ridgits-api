@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { deleteRidgitsAccount } from '@/lib/account/delete-account'
-import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
+import { isNextResponse, requireRidgitsAuthAndAppCheck } from '@/lib/ridgits-auth'
 
 export async function DELETE(request: NextRequest) {
-  const auth = await requireRidgitsAuth(request)
+  const auth = await requireRidgitsAuthAndAppCheck(request)
   if (isNextResponse(auth)) return auth
 
   try {

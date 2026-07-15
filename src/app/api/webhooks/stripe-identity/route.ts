@@ -27,7 +27,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ received: true })
   } catch (error) {
     console.error('[stripe-identity webhook]', error)
-    const message = error instanceof Error ? error.message : 'Webhook processing failed'
-    return NextResponse.json({ error: message }, { status: 400 })
+    return NextResponse.json({ error: 'Webhook verification failed' }, { status: 400 })
   }
 }

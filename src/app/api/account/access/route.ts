@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
+import { isNextResponse, requireRidgitsAuthAndAppCheck } from '@/lib/ridgits-auth'
 import { purgeLockedPackQuizData } from '@/lib/ridgits-pack-access'
 import { isRidgitsBypassEmail } from '@/lib/ridgits-bypass'
 import { isManualProfilePhotoVerifiedForUser } from '@/lib/ridgits-manual-verification'
@@ -8,7 +8,7 @@ import { revokeSubscriptionBadgeIfInactive, repairStaleMembershipTier } from '@/
 import { getIdentityStatus } from '@/lib/trust-safety/stripe-identity'
 
 export async function GET(request: NextRequest) {
-  const auth = await requireRidgitsAuth(request)
+  const auth = await requireRidgitsAuthAndAppCheck(request)
   if (isNextResponse(auth)) return auth
 
   await revokeSubscriptionBadgeIfInactive(auth.uid)

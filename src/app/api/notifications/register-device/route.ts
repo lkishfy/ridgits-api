@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiErrorResponse } from '@/lib/api-errors'
-import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
+import { isNextResponse, requireRidgitsAuthAndAppCheck } from '@/lib/ridgits-auth'
 import { registerDeviceToken, unregisterDeviceToken } from '@/lib/push-notifications'
 import { enforceRateLimit, getClientIp } from '@/lib/trust-safety/rate-limit'
 import { recordDeviceFingerprint } from '@/lib/trust-safety/phone-safety'
 
 export async function POST(request: NextRequest) {
-  const auth = await requireRidgitsAuth(request)
+  const auth = await requireRidgitsAuthAndAppCheck(request)
   if (isNextResponse(auth)) return auth
 
   let body: {
@@ -60,7 +60,7 @@ export async function POST(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
-  const auth = await requireRidgitsAuth(request)
+  const auth = await requireRidgitsAuthAndAppCheck(request)
   if (isNextResponse(auth)) return auth
 
   let body: { deviceId?: string } = {}

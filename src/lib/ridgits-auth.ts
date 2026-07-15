@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { ApiError } from '@/lib/api-errors'
 import { verifyIdToken } from '@/lib/firebase-admin'
+import { isAppCheckRequired, verifyAppCheckToken } from '@/lib/ridgits-app-check'
 
 export interface RidgitsAuthContext {
   uid: string
@@ -39,4 +41,25 @@ export async function requireRidgitsAuth(
 
 export function isNextResponse(value: unknown): value is NextResponse {
   return value instanceof NextResponse
+}
+
+export async function requireRidgitsAuthAndAppCheck(
+  request: NextRequest,
+): Promise<RidgitsAuthContext | NextResponse> {
+  if (isAppCheckRequired()) {
+    const appCheckToken = request.headers.get('X-Firebase-AppCheck')
+    if (!appCheckToken?.trim()) {
+      return NextResponse.json({ error: 'Missing App Check token', code: 'APP_CHECK_REQUIRED' }, { status: 401 })
+    }
+    try {
+      await verifyAppCheckToken(appCheckToken)
+    } catch (error) {
+      if (error instanceof ApiError) {
+        return NextResponse.json({ error: error.message, code: error.code }, { status: error.status })
+      }
+      return NextResponse.json({ error: 'Invalid App Check token', code: 'APP_CHECK_INVALID' }, { status: 401 })
+    }
+  }
+
+  return requireRidgitsAuth(request)
 }

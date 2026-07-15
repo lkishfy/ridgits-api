@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { FieldValue } from 'firebase-admin/firestore'
 import { apiErrorResponse } from '@/lib/api-errors'
-import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
+import { isNextResponse, requireRidgitsAuthAndAppCheck } from '@/lib/ridgits-auth'
 import { getDb } from '@/lib/firebase-admin'
 import { computeAge, isValidBirthYear, MINIMUM_AGE_YEARS, minimumAgeErrorMessage } from '@/lib/trust-safety/age'
 
 export async function POST(request: NextRequest) {
-  const auth = await requireRidgitsAuth(request)
+  const auth = await requireRidgitsAuthAndAppCheck(request)
   if (isNextResponse(auth)) return auth
 
   let body: { birthYear?: number } = {}

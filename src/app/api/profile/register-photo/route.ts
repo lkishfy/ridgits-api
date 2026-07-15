@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiErrorResponse } from '@/lib/api-errors'
-import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
+import { isNextResponse, requireRidgitsAuthAndAppCheck } from '@/lib/ridgits-auth'
 import { getDb } from '@/lib/firebase-admin'
 import { registerProfilePhotoForUser } from '@/lib/trust-safety/profile-photo'
+import { registerPhotoBodySchema } from '@/lib/schemas/ridgits-bodies'
+import { parseJsonBody } from '@/lib/schemas/parse-body'
 import {
   approveProfilePhotoWithoutFaceMatch,
   matchProfilePhotoToIdentity,
@@ -10,17 +12,21 @@ import {
 } from '@/lib/trust-safety/profile-identity-match'
 
 export async function POST(request: NextRequest) {
-  const auth = await requireRidgitsAuth(request)
+  const auth = await requireRidgitsAuthAndAppCheck(request)
   if (isNextResponse(auth)) return auth
 
   try {
-    const body = (await request.json()) as { imageUrl?: string }
-    const imageUrl = typeof body.imageUrl === 'string' ? body.imageUrl.trim() : ''
-    if (!imageUrl) {
-      return NextResponse.json({ error: 'imageUrl is required' }, { status: 400 })
+    let rawBody: unknown
+    try {
+      rawBody = await request.json()
+    } catch {
+      return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
     }
 
-    const registered = await registerProfilePhotoForUser(auth.uid, imageUrl)
+    const body = parseJsonBody(registerPhotoBodySchema, rawBody)
+    if (body instanceof NextResponse) return body
+
+    const registered = await registerProfilePhotoForUser(auth.uid, body.imageUrl)
 
     const userSnap = await getDb().collection('users').doc(auth.uid).get()
     const userData = userSnap.data() ?? {}

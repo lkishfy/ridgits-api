@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiErrorResponse } from '@/lib/api-errors'
-import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
+import { isNextResponse, requireRidgitsAuthAndAppCheck } from '@/lib/ridgits-auth'
 import { getTopNationwideMatches } from '@/lib/matching/nationwide'
 import { isRidgitsBypassEmail } from '@/lib/ridgits-bypass'
 import { requireVerifiedEmail } from '@/lib/trust-safety/email-verification'
@@ -16,7 +16,7 @@ export async function OPTIONS(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const auth = await requireRidgitsAuth(request)
+  const auth = await requireRidgitsAuthAndAppCheck(request)
   if (isNextResponse(auth)) return applyWebCors(auth, request)
 
   let body: { limit?: number; forceRefresh?: boolean } = {}

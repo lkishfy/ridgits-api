@@ -82,26 +82,10 @@ function userProfileMarksQuizComplete(userProfile?: Record<string, unknown>): bo
 /** Mirrors iOS `isQuizCompleted` / `ensureQuizCompletionRecorded` eligibility. */
 export function isQuizCompleteForMatching(
   raw: Record<string, unknown>,
-  userProfile?: Record<string, unknown>,
+  _userProfile?: Record<string, unknown>,
 ): boolean {
-  if (raw.eligibleForMatching === true) return true
-
-  const storedAnswered = readStoredQuestionsAnswered(raw)
-  if (storedAnswered >= QUIZ_COMPLETION_ANSWER_THRESHOLD) return true
-
-  if (userProfileMarksQuizComplete(userProfile)) return true
-
   const normalized = normalizeQuizProgress(raw)
-  if (hasEnoughPersonalityAnswers(normalized.answers)) return true
-
-  if (raw.completed === true) {
-    return (
-      storedAnswered >= QUIZ_COMPLETION_ANSWER_THRESHOLD ||
-      hasEnoughPersonalityAnswers(normalized.answers)
-    )
-  }
-
-  return normalized.completed === true
+  return hasEnoughPersonalityAnswers(normalized.answers)
 }
 
 /** Quiz progress docs that may appear in matching candidate pools. */
@@ -115,7 +99,9 @@ export async function getMatchingEligibleQuizDocs(): Promise<QueryDocumentSnapsh
   const byId = new Map<string, QueryDocumentSnapshot>()
   for (const doc of eligibleSnap.docs) byId.set(doc.id, doc)
   for (const doc of completedSnap.docs) byId.set(doc.id, doc)
-  return [...byId.values()]
+  return [...byId.values()].filter((doc) =>
+    isQuizCompleteForMatching(doc.data() ?? {}),
+  )
 }
 
 /** Supports web flat maps and iOS nested `answers[id].{answer,preferredAnswers,...}`. */

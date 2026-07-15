@@ -196,7 +196,14 @@ export async function moderateProfilePhoto(url: string): Promise<ModerationResul
     const response = await fetch(`https://api.sightengine.com/1.0/check.json?${params.toString()}`, {
       signal: AbortSignal.timeout(6000),
     })
-    if (!response.ok) return { approved: true, provider: 'sightengine' }
+    if (!response.ok) {
+      console.warn('[trust-safety] moderation provider returned non-OK status', response.status)
+      return {
+        approved: false,
+        reason: 'Profile photo moderation is temporarily unavailable.',
+        provider: 'sightengine',
+      }
+    }
 
     const data = (await response.json()) as {
       nudity?: { sexual_activity?: number; sexual_display?: number; erotica?: number }
@@ -215,6 +222,10 @@ export async function moderateProfilePhoto(url: string): Promise<ModerationResul
     return { approved: true, provider: 'sightengine' }
   } catch (error) {
     console.warn('[trust-safety] moderation provider call failed', error)
-    return { approved: true, provider: 'sightengine' }
+    return {
+      approved: false,
+      reason: 'Profile photo moderation is temporarily unavailable.',
+      provider: 'sightengine',
+    }
   }
 }

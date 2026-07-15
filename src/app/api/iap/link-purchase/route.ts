@@ -1,24 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiErrorResponse } from '@/lib/api-errors'
-import { isNextResponse, requireRidgitsAuth } from '@/lib/ridgits-auth'
+import { isNextResponse, requireRidgitsAuthAndAppCheck } from '@/lib/ridgits-auth'
 import { linkPurchase } from '@/lib/ridgits-iap'
+import { linkPurchaseBodySchema } from '@/lib/schemas/ridgits-bodies'
+import { parseJsonBody } from '@/lib/schemas/parse-body'
 
 export async function POST(request: NextRequest) {
-  const auth = await requireRidgitsAuth(request)
+  const auth = await requireRidgitsAuthAndAppCheck(request)
   if (isNextResponse(auth)) return auth
 
-  let body: {
-    transactionId?: string
-    productId?: string
-    signedTransactionInfo?: string
-    restoring?: boolean
-  } = {}
-
+  let rawBody: unknown
   try {
-    body = await request.json()
+    rawBody = await request.json()
   } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
+
+  const body = parseJsonBody(linkPurchaseBodySchema, rawBody)
+  if (body instanceof NextResponse) return body
 
   try {
     const result = await linkPurchase({
